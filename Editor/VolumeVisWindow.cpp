@@ -56,7 +56,7 @@ void VolumeVisWindow::Create(EditorComponent* _editor)
 	}));
 	AddWidget(&rangeMaxSlider);
 
-	diffusionSlider.Create(0.01f, 5.0f, 0.5f, 1000, "Diffusion: ");
+	diffusionSlider.Create(0.01f, 100.0f, 0.5f, 1000, "Diffusion: ");
 	diffusionSlider.SetTooltip("How fast the heat blob spreads from each sensor (Gaussian sigma growth rate)");
 	diffusionSlider.OnSlide(forEachSelected([](VolumeVisualizerComponent* v, wi::gui::EventArgs args) {
 		v->diffusionAlpha = args.fValue;

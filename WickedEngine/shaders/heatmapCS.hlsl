@@ -42,11 +42,22 @@ void main(uint3 DTid : SV_DispatchThreadID)
 	sg = max(SIGMA_FLOOR, sg);
 	float s2 = 2.0 * sg * sg;
 
-	// Weighted-blend of all active sensors using power-weighted Gaussian.
-	// edge_sharpness = 1 → pure Gaussian (soft). >1 → narrow blend zones (sensors
-	// hold color, sharp territory boundaries). <1 → very soft smear.
-	float totalWeight = 0.0;
-	float weightedSum = 0.0;
+	// Weight computation is split so edge_sharpness affects ONLY the blend
+	// zone between sensors, NOT how far each sensor reaches:
+	//
+	//   presenceWeight (raw Gaussian)  → decides "is a sensor near this voxel?"
+	//                                    (controls the spread/reach of the field)
+	//   blendWeight    (sharpened)     → decides "how much does each sensor
+	//                                    contribute to this voxel's color?"
+	//                                    (controls boundary sharpness between sensors)
+	//
+	// Using pow() on the raw Gaussian also scales sigma (mathematically
+	// pow(exp(-x), k) == exp(-k·x)), so we'd see sharpness shrink the
+	// field extent. Splitting the two responsibilities avoids that coupling.
+	float totalPresence = 0.0;  // for emptiness check — independent of sharpness
+	float blendTotal    = 0.0;  // denominator for color blend
+	float weightedSum   = 0.0;  // numerator for color blend
+
 	[unroll]
 	for (uint s = 0; s < 8; s++)
 	{
@@ -54,17 +65,21 @@ void main(uint3 DTid : SV_DispatchThreadID)
 
 		float3 diff = worldPos - heatmap.sensors[s].xyz;
 		float dist2 = dot(diff, diff);
-		float w = pow(exp(-dist2 / s2), heatmap.edge_sharpness);
 
-		totalWeight += w;
-		weightedSum += w * heatmap.sensors[s].w;
+		float gauss = exp(-dist2 / s2);
+		float sharp = pow(gauss, heatmap.edge_sharpness);
+
+		totalPresence += gauss;
+		blendTotal    += sharp;
+		weightedSum   += sharp * heatmap.sensors[s].w;
 	}
 
-	// Remap [0, 1] value into [DENSITY_MIN, 1] to keep low-value sensors
-	// safely above the PS gate; empty voxels write pure 0.
-	if (totalWeight > EMPTY_WEIGHT_THRESHOLD)
+	// Presence uses the raw Gaussian sum so the field extent is driven by
+	// diffusion + sensor_reach only. Color comes from the sharpness-weighted
+	// average, so edge_sharpness shapes the blend but doesn't shrink the field.
+	if (totalPresence > EMPTY_WEIGHT_THRESHOLD)
 	{
-		float t = saturate(weightedSum / totalWeight);
+		float t = saturate(weightedSum / blendTotal);
 		output[DTid] = EncodeDensity(t);
 	}
 	else
