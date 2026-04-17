@@ -66,6 +66,9 @@ namespace wi::scene
 		wi::ecs::ComponentManager<PhysicsConstraintComponent>& constraints = componentLibrary.Register<PhysicsConstraintComponent>("wi::scene::Scene::constraints", 6); // version = 6
 		wi::ecs::ComponentManager<SplineComponent>& splines = componentLibrary.Register<SplineComponent>("wi::scene::Scene::splines", 4); // version = 4
 		wi::ecs::ComponentManager<wi::GaussianSplatModel>& gaussian_splats = componentLibrary.Register<wi::GaussianSplatModel>("wi::scene::Scene::gaussian_splats");
+		wi::ecs::ComponentManager<IoTSensorComponent>& iot_sensors = componentLibrary.Register<IoTSensorComponent>("wi::scene::Scene::iot_sensors");
+		wi::ecs::ComponentManager<VolumeVisualizerComponent>& volume_visualizers = componentLibrary.Register<VolumeVisualizerComponent>("wi::scene::Scene::volume_visualizers");
+		wi::ecs::ComponentManager<IoTSimulatorComponent>& iot_simulators = componentLibrary.Register<IoTSimulatorComponent>("wi::scene::Scene::iot_simulators");
 
 		// Non-serialized attributes:
 		float dt = 0;
@@ -523,6 +526,8 @@ namespace wi::scene
 		void RunFontUpdateSystem(wi::jobsystem::context& ctx);
 		void RunCharacterUpdateSystem(wi::jobsystem::context& ctx);
 		void RunSplineUpdateSystem(wi::jobsystem::context& ctx);
+		void RunVolumeVisualizerUpdateSystem(wi::jobsystem::context& ctx);
+		void RunIoTSimulatorUpdateSystem(wi::jobsystem::context& ctx);
 
 
 		struct RayIntersectionResult

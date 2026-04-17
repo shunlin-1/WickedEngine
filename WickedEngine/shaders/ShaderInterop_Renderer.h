@@ -62,6 +62,32 @@ struct alignas(16) ShaderScene
 	ShaderTerrain terrain;
 
 	ShaderVoxelGrid voxelgrid;
+
+	// Heat map system: data is filled by wi::renderer::UpdateFrameCB and read by heatmapCS
+	// All sensors are in WORLD space; the CS converts to local using world_matrix_inverse
+	struct alignas(16) ShaderHeatmap
+	{
+		float4x4 world_matrix;          // visualizer box world transform
+		float4x4 world_matrix_inverse;  // inverse, for world->local conversion in CS
+
+		float4 sensors[8];              // xyz = world position, w = normalized [0,1] value
+
+		uint sensor_count;              // 0..8
+		uint resolution;                // 3D texture dimension (e.g., 64)
+		float diffusion_alpha;          // controls Gaussian spread
+		float elapsed_time;             // accumulated time since last reset
+
+		int texture_index;              // bindless descriptor for the 3D heatmap texture
+		uint enabled;                   // 0 = no visualizer in scene, 1 = active
+		float ambient_value;            // normalized [0,1] background fill color
+		float opacity_scale;            // [0,1] post-multiplier on accumulated fog (visibility fade)
+
+		float density_scale;            // [0,1] per-step alpha contribution (hot-spot sharpness)
+		float sensor_reach;             // world-units cap on per-sensor Gaussian spread
+		uint padding_hm2;
+		uint padding_hm3;
+	};
+	ShaderHeatmap heatmap;
 };
 
 enum SHADERMATERIAL_OPTIONS

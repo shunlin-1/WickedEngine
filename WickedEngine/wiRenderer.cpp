@@ -375,6 +375,7 @@ PipelineState PSO_object_wire_mesh_shader;
 PipelineState PSO_object_wire_doublesided;
 PipelineState PSO_object_wire_tessellation_doublesided;
 PipelineState PSO_object_wire_mesh_shader_doublesided;
+PipelineState PSO_heatmap;
 
 wi::jobsystem::context raytracing_ctx;
 wi::jobsystem::context objectps_ctx;
@@ -1169,6 +1170,9 @@ void LoadShaders()
 	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_VIRTUALTEXTURE_TILEALLOCATE], "virtualTextureTileAllocateCS.cso"); });
 	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_VIRTUALTEXTURE_RESIDENCYUPDATE], "virtualTextureResidencyUpdateCS.cso"); });
 	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_WIND], "windCS.cso"); });
+	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_HEATMAP], "heatmapCS.cso"); });
+	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::VS, shaders[VSTYPE_HEATMAP], "heatmapVS.cso"); });
+	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::PS, shaders[PSTYPE_HEATMAP], "heatmapPS.cso"); });
 	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_YUV_TO_RGB], "yuv_to_rgbCS.cso"); });
 	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_YUV_TO_RGB_ARRAY], "yuv_to_rgbCS.cso", ShaderModel::SM_6_0, {"ARRAY"}); });
 	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_WETMAP_UPDATE], "wetmap_updateCS.cso"); });
@@ -1307,6 +1311,23 @@ void LoadShaders()
 
 		desc.rs = &rasterizers[RSTYPE_WIRE_DOUBLESIDED];
 		device->CreatePipelineState(&desc, &PSO_object_wire_tessellation_doublesided);
+		});
+
+	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) {
+		// Heat map cube PSO: RSTYPE_BACK = cull FRONT faces, so back faces are
+		// rasterized and the volume renders even when the camera is inside the box.
+		// DSSTYPE_DEPTHDISABLED = no depth test/write: rasterizer does NOT reject
+		// back-face pixels that lie behind opaque meshes sitting inside the volume.
+		// The PS ray-box test still clips to the volume, and alpha blending over
+		// the already-rendered scene composites fog over the mesh — giving the
+		// "shiny fog envelops the model" look.
+		PipelineStateDesc desc;
+		desc.vs = &shaders[VSTYPE_HEATMAP];
+		desc.ps = &shaders[PSTYPE_HEATMAP];
+		desc.rs = &rasterizers[RSTYPE_BACK];
+		desc.bs = &blendStates[BSTYPE_TRANSPARENT];
+		desc.dss = &depthStencils[DSSTYPE_DEPTHDISABLED];
+		device->CreatePipelineState(&desc, &PSO_heatmap);
 		});
 	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) {
 		PipelineStateDesc desc;
@@ -2239,6 +2260,18 @@ void LoadBuffers()
 		desc.bind_flags = BindFlag::SHADER_RESOURCE | BindFlag::UNORDERED_ACCESS;
 		device->CreateTexture(&desc, nullptr, &textures[TEXTYPE_2D_CAUSTICS]);
 		device->SetName(&textures[TEXTYPE_2D_CAUSTICS], "textures[TEXTYPE_2D_CAUSTICS]");
+	}
+	{
+		// Heat map 3D texture: written by heatmapCS, sampled by heatmapPS
+		TextureDesc desc;
+		desc.type = TextureDesc::Type::TEXTURE_3D;
+		desc.format = Format::R16_FLOAT;
+		desc.width = 64;
+		desc.height = 64;
+		desc.depth = 64;
+		desc.bind_flags = BindFlag::SHADER_RESOURCE | BindFlag::UNORDERED_ACCESS;
+		device->CreateTexture(&desc, nullptr, &textures[TEXTYPE_3D_HEATMAP]);
+		device->SetName(&textures[TEXTYPE_3D_HEATMAP], "textures[TEXTYPE_3D_HEATMAP]");
 	}
 }
 void SetUpStates()
@@ -4403,6 +4436,74 @@ void UpdatePerFrameData(
 	frameCB.texture_wind_prev_index = device->GetDescriptorIndex(&textures[TEXTYPE_3D_WIND_PREV], SubresourceType::SRV);
 	frameCB.texture_caustics_index = device->GetDescriptorIndex(&textures[TEXTYPE_2D_CAUSTICS], SubresourceType::SRV);
 
+	// Heat map: register the 3D texture descriptor so PS can sample it via bindless lookup.
+	frameCB.scene.heatmap.texture_index = device->GetDescriptorIndex(&textures[TEXTYPE_3D_HEATMAP], SubresourceType::SRV);
+
+	// Fill heat map sensor data from the scene's ECS components.
+	// Defaults: disabled. Will be enabled if we find a valid visualizer.
+	frameCB.scene.heatmap.enabled = 0;
+	frameCB.scene.heatmap.sensor_count = 0;
+	frameCB.scene.heatmap.resolution = textures[TEXTYPE_3D_HEATMAP].GetDesc().width;
+
+	// === HEATMAP DATA GATHERING ===
+	// Find the first enabled VolumeVisualizerComponent and gather its sensor data.
+	{
+		const wi::scene::Scene& scene = *vis.scene;
+		for (size_t i = 0; i < scene.volume_visualizers.GetCount(); ++i)
+		{
+			const wi::scene::VolumeVisualizerComponent& visualizer = scene.volume_visualizers[i];
+			if (!visualizer.IsEnabled()) continue;
+
+			wi::ecs::Entity visEntity = scene.volume_visualizers.GetEntity(i);
+			const wi::scene::TransformComponent* visTransform = scene.transforms.GetComponent(visEntity);
+			if (visTransform == nullptr) continue;
+
+			// Store world matrix and its inverse
+			XMMATRIX worldMat = XMLoadFloat4x4(&visTransform->world);
+			XMMATRIX worldMatInv = XMMatrixInverse(nullptr, worldMat);
+			XMStoreFloat4x4(&frameCB.scene.heatmap.world_matrix, worldMat);
+			XMStoreFloat4x4(&frameCB.scene.heatmap.world_matrix_inverse, worldMatInv);
+
+			frameCB.scene.heatmap.diffusion_alpha = visualizer.diffusionAlpha;
+			frameCB.scene.heatmap.elapsed_time = visualizer.elapsedTime;
+			frameCB.scene.heatmap.opacity_scale = visualizer.opacityScale;
+			frameCB.scene.heatmap.density_scale = visualizer.densityScale;
+			frameCB.scene.heatmap.sensor_reach = visualizer.sensorReach;
+
+			// Gather IoT sensors (up to 8). Normalize values to [0,1] using the range.
+			float range = visualizer.valueRangeMax - visualizer.valueRangeMin;
+
+			// Normalize ambient value the same way as sensors so it maps to the same gradient
+			float ambientNorm = (range > 0.0001f)
+				? (visualizer.ambientValue - visualizer.valueRangeMin) / range
+				: 0.0f;
+			frameCB.scene.heatmap.ambient_value = std::max(0.0f, std::min(1.0f, ambientNorm));
+			uint32_t count = 0;
+			for (size_t s = 0; s < scene.iot_sensors.GetCount() && count < 8; ++s)
+			{
+				const wi::scene::IoTSensorComponent& sensor = scene.iot_sensors[s];
+				if (!sensor.IsEnabled()) continue;
+
+				wi::ecs::Entity sensorEntity = scene.iot_sensors.GetEntity(s);
+				const wi::scene::TransformComponent* sensorTransform = scene.transforms.GetComponent(sensorEntity);
+				if (sensorTransform == nullptr) continue;
+
+				XMFLOAT3 wp = sensorTransform->GetPosition();
+				float normalized = (range > 0.0001f) ? (sensor.sensorValue - visualizer.valueRangeMin) / range : 0.5f;
+				normalized = std::max(0.0f, std::min(1.0f, normalized));
+
+				frameCB.scene.heatmap.sensors[count].x = wp.x;
+				frameCB.scene.heatmap.sensors[count].y = wp.y;
+				frameCB.scene.heatmap.sensors[count].z = wp.z;
+				frameCB.scene.heatmap.sensors[count].w = normalized;
+				count++;
+			}
+			frameCB.scene.heatmap.sensor_count = count;
+			frameCB.scene.heatmap.enabled = 1;
+			break; // only the first visualizer
+		}
+	}
+
 	// See if indirect debug buffer needs to be resized:
 	if (indirectDebugStatsReadback_available[device->GetBufferIndex()] && indirectDebugStatsReadback[device->GetBufferIndex()].mapped_data != nullptr)
 	{
@@ -5097,6 +5198,7 @@ void UpdateRenderData(
 
 	PushBarrier(GPUBarrier::Image(&textures[TEXTYPE_3D_WIND], textures[TEXTYPE_3D_WIND].desc.layout, ResourceState::UNORDERED_ACCESS));
 	PushBarrier(GPUBarrier::Image(&textures[TEXTYPE_3D_WIND_PREV], textures[TEXTYPE_3D_WIND_PREV].desc.layout, ResourceState::UNORDERED_ACCESS));
+	PushBarrier(GPUBarrier::Image(&textures[TEXTYPE_3D_HEATMAP], textures[TEXTYPE_3D_HEATMAP].desc.layout, ResourceState::UNORDERED_ACCESS));
 	PushBarrier(GPUBarrier::Buffer(&buffers[BUFFERTYPE_INDIRECT_DEBUG_0], ResourceState::VERTEX_BUFFER | ResourceState::INDIRECT_ARGUMENT, ResourceState::COPY_SRC));
 	FlushBarriers(cmd);
 
@@ -5226,6 +5328,19 @@ void UpdateRenderData(
 		}
 		PushBarrier(GPUBarrier::Image(&textures[TEXTYPE_3D_WIND], ResourceState::UNORDERED_ACCESS, textures[TEXTYPE_3D_WIND].desc.layout));
 		PushBarrier(GPUBarrier::Image(&textures[TEXTYPE_3D_WIND_PREV], ResourceState::UNORDERED_ACCESS, textures[TEXTYPE_3D_WIND_PREV].desc.layout));
+		device->EventEnd(cmd);
+		wi::profiler::EndRange(range);
+	}
+
+	{
+		// Heat map dispatch — same pattern as wind. Frame CB is already bound by BindCommonResources above.
+		auto range = wi::profiler::BeginRangeGPU("Heatmap", cmd);
+		device->EventBegin("Heatmap", cmd);
+		device->BindComputeShader(&shaders[CSTYPE_HEATMAP], cmd);
+		device->BindUAV(&textures[TEXTYPE_3D_HEATMAP], 0, cmd);
+		const TextureDesc& heatmap_desc = textures[TEXTYPE_3D_HEATMAP].GetDesc();
+		device->Dispatch(heatmap_desc.width / 8, heatmap_desc.height / 8, heatmap_desc.depth / 8, cmd);
+		PushBarrier(GPUBarrier::Image(&textures[TEXTYPE_3D_HEATMAP], ResourceState::UNORDERED_ACCESS, textures[TEXTYPE_3D_HEATMAP].desc.layout));
 		device->EventEnd(cmd);
 		wi::profiler::EndRange(range);
 	}
@@ -19123,6 +19238,18 @@ void PaintDecalIntoObjectSpaceTexture(const PaintDecalParams& params)
 void DrawVoxelGrid(const wi::VoxelGrid* voxelgrid)
 {
 	renderableVoxelgrids.push_back(voxelgrid);
+}
+void DrawHeatmap(CommandList cmd)
+{
+	// Skip if no visualizer in the scene (heatmap.enabled would be 0)
+	// We can detect this by checking the frameCB.scene.heatmap.enabled flag
+	// but since this is dispatched from the render path, we just trust the caller
+	// (the render path checks volume_visualizers.GetCount() before calling).
+	device->EventBegin("Heatmap Volume", cmd);
+	device->BindPipelineState(&PSO_heatmap, cmd);
+	// 36 vertices = 6 faces * 2 triangles * 3 vertices, sourced from cube.hlsli in the VS
+	device->Draw(36, 0, cmd);
+	device->EventEnd(cmd);
 }
 void DrawPathQuery(const wi::PathQuery* pathquery)
 {

@@ -228,6 +228,7 @@ wi::vector<ShaderEntry> shaders = {
 	{"virtualTextureTileAllocateCS", wi::graphics::ShaderStage::CS },
 	{"virtualTextureResidencyUpdateCS", wi::graphics::ShaderStage::CS },
 	{"windCS", wi::graphics::ShaderStage::CS },
+	{"heatmapCS", wi::graphics::ShaderStage::CS },
 	{"yuv_to_rgbCS", wi::graphics::ShaderStage::CS },
 	{"wetmap_updateCS", wi::graphics::ShaderStage::CS },
 	{"causticsCS", wi::graphics::ShaderStage::CS },
@@ -284,6 +285,7 @@ wi::vector<ShaderEntry> shaders = {
 	{"impostorPS_prepass", wi::graphics::ShaderStage::PS },
 	{"impostorPS_prepass_depthonly", wi::graphics::ShaderStage::PS },
 	{"forceFieldVisualizerPS", wi::graphics::ShaderStage::PS },
+	{"heatmapPS", wi::graphics::ShaderStage::PS },
 	{"fontPS", wi::graphics::ShaderStage::PS },
 	{"envMap_skyPS_static", wi::graphics::ShaderStage::PS },
 	{"envMap_skyPS_dynamic", wi::graphics::ShaderStage::PS },
@@ -348,6 +350,7 @@ wi::vector<ShaderEntry> shaders = {
 	{"shadowVS_transparent", wi::graphics::ShaderStage::VS },
 	{"screenVS", wi::graphics::ShaderStage::VS },
 	{"voxelgridVS", wi::graphics::ShaderStage::VS },
+	{"heatmapVS", wi::graphics::ShaderStage::VS },
 	{"trailVS", wi::graphics::ShaderStage::VS },
 	{"gaussian_splatVS", wi::graphics::ShaderStage::VS },
 

@@ -165,6 +165,9 @@ void ComponentsWindow::Create(EditorComponent* _editor)
 	constraintWnd.Create(editor);
 	splineWnd.Create(editor);
 	gaussiansplatWnd.Create(editor);
+	iotSensorWnd.Create(editor);
+	volumeVisWnd.Create(editor);
+	iotSimulatorWnd.Create(editor);
 
 	enum ADD_THING
 	{
@@ -198,6 +201,9 @@ void ComponentsWindow::Create(EditorComponent* _editor)
 		ADD_METADATA,
 		ADD_CONSTRAINT,
 		ADD_SPLINE,
+		ADD_IOT_SENSOR,
+		ADD_VOLUME_VISUALIZER,
+		ADD_IOT_SIMULATOR,
 	};
 
 	newComponentCombo.Create("Add component  ");
@@ -237,6 +243,9 @@ void ComponentsWindow::Create(EditorComponent* _editor)
 	newComponentCombo.AddItem("Metadata " ICON_METADATA, ADD_METADATA);
 	newComponentCombo.AddItem("Constraint " ICON_CONSTRAINT, ADD_CONSTRAINT);
 	newComponentCombo.AddItem("Spline " ICON_SPLINE, ADD_SPLINE);
+	newComponentCombo.AddItem("IoT Sensor " ICON_IOT_SENSOR, ADD_IOT_SENSOR);
+	newComponentCombo.AddItem("Volume Visualizer " ICON_VOLUME_VIS, ADD_VOLUME_VISUALIZER);
+	newComponentCombo.AddItem("IoT Simulator " ICON_IOT_SIMULATOR, ADD_IOT_SIMULATOR);
 	newComponentCombo.OnSelect([=](wi::gui::EventArgs args) {
 		newComponentCombo.SetSelectedWithoutCallback(-1);
 		wi::scene::Scene& scene = editor->GetCurrentScene();
@@ -380,6 +389,18 @@ void ComponentsWindow::Create(EditorComponent* _editor)
 				if (scene.splines.Contains(entity))
 					valid = false;
 				break;
+			case ADD_IOT_SENSOR:
+				if (scene.iot_sensors.Contains(entity))
+					valid = false;
+				break;
+			case ADD_VOLUME_VISUALIZER:
+				if (scene.volume_visualizers.Contains(entity))
+					valid = false;
+				break;
+			case ADD_IOT_SIMULATOR:
+				if (scene.iot_simulators.Contains(entity))
+					valid = false;
+				break;
 			default:
 				valid = false;
 				break;
@@ -498,6 +519,15 @@ void ComponentsWindow::Create(EditorComponent* _editor)
 			case ADD_SPLINE:
 				scene.splines.Create(entity);
 				break;
+			case ADD_IOT_SENSOR:
+				scene.iot_sensors.Create(entity);
+				break;
+			case ADD_VOLUME_VISUALIZER:
+				scene.volume_visualizers.Create(entity);
+				break;
+			case ADD_IOT_SIMULATOR:
+				scene.iot_simulators.Create(entity);
+				break;
 			default:
 				break;
 			}
@@ -546,6 +576,9 @@ void ComponentsWindow::Create(EditorComponent* _editor)
 	AddWidget(&constraintWnd);
 	AddWidget(&splineWnd);
 	AddWidget(&gaussiansplatWnd);
+	AddWidget(&iotSensorWnd);
+	AddWidget(&volumeVisWnd);
+	AddWidget(&iotSimulatorWnd);
 
 	materialWnd.SetVisible(false);
 	weatherWnd.SetVisible(false);
@@ -582,6 +615,9 @@ void ComponentsWindow::Create(EditorComponent* _editor)
 	constraintWnd.SetVisible(false);
 	splineWnd.SetVisible(false);
 	gaussiansplatWnd.SetVisible(false);
+	iotSensorWnd.SetVisible(false);
+	volumeVisWnd.SetVisible(false);
+	iotSimulatorWnd.SetVisible(false);
 
 	XMFLOAT2 size = XMFLOAT2(338, 500);
 	if (editor->main->config.GetSection("layout").Has("components.width"))
@@ -1117,6 +1153,45 @@ void ComponentsWindow::ResizeLayout()
 	else
 	{
 		gaussiansplatWnd.SetVisible(false);
+	}
+
+	if (scene.iot_sensors.Contains(iotSensorWnd.entity))
+	{
+		iotSensorWnd.SetVisible(true);
+		iotSensorWnd.SetPos(pos);
+		iotSensorWnd.SetSize(XMFLOAT2(width, iotSensorWnd.GetScale().y));
+		pos.y += iotSensorWnd.GetSize().y;
+		pos.y += padding;
+	}
+	else
+	{
+		iotSensorWnd.SetVisible(false);
+	}
+
+	if (scene.volume_visualizers.Contains(volumeVisWnd.entity))
+	{
+		volumeVisWnd.SetVisible(true);
+		volumeVisWnd.SetPos(pos);
+		volumeVisWnd.SetSize(XMFLOAT2(width, volumeVisWnd.GetScale().y));
+		pos.y += volumeVisWnd.GetSize().y;
+		pos.y += padding;
+	}
+	else
+	{
+		volumeVisWnd.SetVisible(false);
+	}
+
+	if (scene.iot_simulators.Contains(iotSimulatorWnd.entity))
+	{
+		iotSimulatorWnd.SetVisible(true);
+		iotSimulatorWnd.SetPos(pos);
+		iotSimulatorWnd.SetSize(XMFLOAT2(width, iotSimulatorWnd.GetScale().y));
+		pos.y += iotSimulatorWnd.GetSize().y;
+		pos.y += padding;
+	}
+	else
+	{
+		iotSimulatorWnd.SetVisible(false);
 	}
 }
 

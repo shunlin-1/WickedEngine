@@ -360,6 +360,8 @@ namespace wi::renderer
 		const Visibility& vis,
 		wi::graphics::CommandList cmd
 	);
+	// Draw the IoT heat map volume (rasterizes a cube + ray-marches the 3D heat map texture)
+	void DrawHeatmap(wi::graphics::CommandList cmd);
 	// Draw Lens Flares for lights that have them enabled
 	void DrawLensFlares(
 		const Visibility& vis,

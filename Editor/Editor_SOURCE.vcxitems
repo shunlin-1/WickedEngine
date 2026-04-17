@@ -83,6 +83,9 @@
     <ClCompile Include="$(MSBuildThisFileDirectory)Translator.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)VideoWindow.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)VoxelGridWindow.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)IoTSensorWindow.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)IoTSimulatorWindow.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)VolumeVisWindow.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)WeatherWindow.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)xatlas.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">NotUsing</PrecompiledHeader>
@@ -153,6 +156,9 @@
     <ClInclude Include="$(MSBuildThisFileDirectory)ufbx.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)VideoWindow.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)VoxelGridWindow.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)IoTSensorWindow.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)IoTSimulatorWindow.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)VolumeVisWindow.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)WeatherWindow.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)xatlas.h" />
   </ItemGroup>

@@ -3699,4 +3699,81 @@ namespace wi::scene
 		return ret;
 	}
 
+	void IoTSensorComponent::Serialize(wi::Archive& archive, EntitySerializer& seri)
+	{
+		if (archive.IsReadMode())
+		{
+			archive >> _flags;
+			archive >> sensorValue;
+		}
+		else
+		{
+			archive << _flags;
+			archive << sensorValue;
+		}
+	}
+
+	void VolumeVisualizerComponent::Serialize(wi::Archive& archive, EntitySerializer& seri)
+	{
+		if (archive.IsReadMode())
+		{
+			archive >> _flags;
+			archive >> valueRangeMin;
+			archive >> valueRangeMax;
+			archive >> diffusionAlpha;
+			archive >> opacityScale;
+			archive >> ambientValue;
+			archive >> densityScale;
+			archive >> sensorReach;
+		}
+		else
+		{
+			archive << _flags;
+			archive << valueRangeMin;
+			archive << valueRangeMax;
+			archive << diffusionAlpha;
+			archive << opacityScale;
+			archive << ambientValue;
+			archive << densityScale;
+			archive << sensorReach;
+		}
+	}
+
+	void IoTSimulatorComponent::Serialize(wi::Archive& archive, EntitySerializer& seri)
+	{
+		if (archive.IsReadMode())
+		{
+			uint32_t vmode, mmode;
+			archive >> _flags;
+			archive >> vmode;
+			archive >> offset;
+			archive >> amplitude;
+			archive >> frequency;
+			archive >> phase;
+			archive >> meanReversion;
+			archive >> rampDuration;
+			archive >> mmode;
+			archive >> motionCenter;
+			archive >> motionRadius;
+			archive >> motionSpeed;
+			valueMode = (ValueMode)vmode;
+			motionMode = (MotionMode)mmode;
+		}
+		else
+		{
+			archive << _flags;
+			archive << (uint32_t)valueMode;
+			archive << offset;
+			archive << amplitude;
+			archive << frequency;
+			archive << phase;
+			archive << meanReversion;
+			archive << rampDuration;
+			archive << (uint32_t)motionMode;
+			archive << motionCenter;
+			archive << motionRadius;
+			archive << motionSpeed;
+		}
+	}
+
 }

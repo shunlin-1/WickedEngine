@@ -34,6 +34,9 @@
 #include "ConstraintWindow.h"
 #include "SplineWindow.h"
 #include "GaussianSplatWindow.h"
+#include "IoTSensorWindow.h"
+#include "IoTSimulatorWindow.h"
+#include "VolumeVisWindow.h"
 
 class EditorComponent;
 
@@ -82,6 +85,9 @@ public:
 	ConstraintWindow constraintWnd;
 	SplineWindow splineWnd;
 	GaussianSplatWindow gaussiansplatWnd;
+	IoTSensorWindow iotSensorWnd;
+	VolumeVisWindow volumeVisWnd;
+	IoTSimulatorWindow iotSimulatorWnd;
 
 	enum class Filter : uint64_t
 	{
@@ -118,6 +124,9 @@ public:
 		Constraint = 1ull << 30ull,
 		Spline = 1ull << 31ull,
 		GaussianSplat = 1ull << 32ull,
+		IoTSensor = 1ull << 33ull,
+		VolumeVisualizer = 1ull << 34ull,
+		IoTSimulator = 1ull << 35ull,
 
 		All = ~0ull,
 	} filter = Filter::All;

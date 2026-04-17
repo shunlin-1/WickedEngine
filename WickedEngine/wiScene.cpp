@@ -404,6 +404,10 @@ namespace wi::scene
 
 		RunLightUpdateSystem(ctx);
 
+		RunIoTSimulatorUpdateSystem(ctx);
+
+		RunVolumeVisualizerUpdateSystem(ctx);
+
 		RunParticleUpdateSystem(ctx);
 
 		RunSoundUpdateSystem(ctx);
@@ -9744,6 +9748,108 @@ namespace wi::scene
 				{
 					XMFLOAT3 roll_pitch_yaw = wi::math::QuaternionToRollPitchYaw(transform->rotation_local);
 					humanoid.knee_bending *= (roll_pitch_yaw.y / XM_PI * 180.0f) < 0 ? -1 : 1; // MIXAMO fix!
+				}
+			}
+		}
+	}
+
+	void Scene::RunVolumeVisualizerUpdateSystem(wi::jobsystem::context& ctx)
+	{
+		// Accumulate elapsed time on each enabled visualizer (used for Gaussian spread).
+		// Single-threaded loop because there are typically only 1-2 visualizers.
+		for (size_t i = 0; i < volume_visualizers.GetCount(); ++i)
+		{
+			VolumeVisualizerComponent& vis = volume_visualizers[i];
+			if (vis.IsEnabled())
+			{
+				vis.elapsedTime += dt;
+			}
+		}
+	}
+
+	// Evaluate the simulated sensor value from the selected pattern.
+	//
+	//   sim     : simulator component holding pattern params
+	//   sim_time: seconds accumulated while the simulator has been enabled
+	//   dt      : frame delta time (used by RANDOM_WALK for integration)
+	//
+	// Returns the raw sensor value (NOT normalized — caller writes straight into
+	// IoTSensorComponent::sensorValue, and the existing heatmap pipeline handles
+	// normalization via VolumeVisualizerComponent::valueRangeMin/Max).
+	//
+	// TODO(user): fill in each case body. See pattern notes in the component header.
+	static float EvaluateSimValue(IoTSimulatorComponent& sim, float sim_time, float dt)
+	{
+		switch (sim.valueMode)
+		{
+			case IoTSimulatorComponent::ValueMode::SINE:
+				// TODO: sinusoidal oscillation.
+				//   return sim.offset + sim.amplitude * sin(2*pi*sim.frequency*sim_time + sim.phase);
+				return sim.offset;
+
+			case IoTSimulatorComponent::ValueMode::RANDOM_WALK:
+				// TODO: Ornstein-Uhlenbeck (mean-reverting Gaussian noise).
+				//   N01 ~= (wi::random::GetRandom(0.f,1.f) * 2 - 1)  (crude uniform approximation)
+				//   sim._runtime_value += sim.meanReversion * (sim.offset - sim._runtime_value) * dt
+				//                        + sim.amplitude * N01 * sqrt(dt);
+				//   return sim._runtime_value;
+				return sim._runtime_value;
+
+			case IoTSimulatorComponent::ValueMode::RAMP_HOLD:
+				// TODO: linear ramp from offset up to offset+amplitude over rampDuration seconds.
+				//   float t01 = saturate(sim_time / max(sim.rampDuration, 0.001));
+				//   return sim.offset + sim.amplitude * t01;
+				return sim.offset;
+		}
+		return sim.offset;
+	}
+
+	void Scene::RunIoTSimulatorUpdateSystem(wi::jobsystem::context& ctx)
+	{
+		// Single-threaded loop — simulator counts are small (tens, not thousands).
+		// If that grows, convert to wi::jobsystem::Dispatch following RunScriptUpdateSystem.
+		const float sim_dt = dt;
+		for (size_t i = 0; i < iot_simulators.GetCount(); ++i)
+		{
+			IoTSimulatorComponent& sim = iot_simulators[i];
+			if (!sim.IsEnabled())
+				continue;
+
+			sim._runtime_time += sim_dt;
+			Entity entity = iot_simulators.GetEntity(i);
+
+			// --- Value drive ---
+			if (sim.DrivesValue())
+			{
+				IoTSensorComponent* sensor = iot_sensors.GetComponent(entity);
+				if (sensor != nullptr)
+				{
+					sensor->sensorValue = EvaluateSimValue(sim, sim._runtime_time, sim_dt);
+				}
+			}
+
+			// --- Motion drive ---
+			if (sim.DrivesTransform() && sim.motionMode != IoTSimulatorComponent::MotionMode::STATIC)
+			{
+				TransformComponent* xform = transforms.GetComponent(entity);
+				if (xform != nullptr)
+				{
+					const float omega = XM_2PI * sim.motionSpeed * sim._runtime_time;
+					XMFLOAT3 pos = sim.motionCenter;
+					switch (sim.motionMode)
+					{
+						case IoTSimulatorComponent::MotionMode::ORBIT:
+							pos.x += sim.motionRadius * std::cos(omega);
+							pos.z += sim.motionRadius * std::sin(omega);
+							break;
+						case IoTSimulatorComponent::MotionMode::PING_PONG:
+							pos.x += sim.motionRadius * std::sin(omega);
+							break;
+						default:
+							break;
+					}
+					xform->translation_local = pos;
+					xform->SetDirty();
 				}
 			}
 		}

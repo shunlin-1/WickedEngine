@@ -2708,4 +2708,119 @@ namespace wi::scene
 		void Serialize(wi::Archive& archive, wi::ecs::EntitySerializer& seri);
 	};
 
+	// IoT Sensor: a passive data point in the scene.
+	// Position comes from the TransformComponent on the same entity.
+	// Value is set externally (Lua script, editor slider, network update).
+	struct IoTSensorComponent
+	{
+		enum FLAGS
+		{
+			EMPTY = 0,
+			ENABLED = 1 << 0,
+		};
+		uint32_t _flags = ENABLED;
+
+		float sensorValue = 50.0f; // raw sensor reading
+
+		constexpr bool IsEnabled() const { return _flags & ENABLED; }
+		constexpr void SetEnabled(bool value) { set_flag(_flags, ENABLED, value); }
+
+		void Serialize(wi::Archive& archive, wi::ecs::EntitySerializer& seri);
+	};
+
+	// Volume Visualizer: defines a box in space where IoT sensors are visualized as a heat map.
+	// Position/scale come from the TransformComponent on the same entity.
+	// Only ONE visualizer is active at a time (the first enabled one found).
+	struct VolumeVisualizerComponent
+	{
+		enum FLAGS
+		{
+			EMPTY = 0,
+			ENABLED = 1 << 0,
+		};
+		uint32_t _flags = ENABLED;
+
+		// Maps sensor values into [0,1] for the colormap
+		float valueRangeMin = 0.0f;
+		float valueRangeMax = 100.0f;
+
+		// Background fill: areas not influenced by any sensor get this raw value.
+		// This is what creates the "cool blue background, hot red spots" contrast.
+		// Set to a low value (e.g., near valueRangeMin) for cool background.
+		float ambientValue = 20.0f;
+
+		// Diffusion parameters
+		float diffusionAlpha = 0.5f; // higher = faster spread
+		float opacityScale = 1.0f;   // fog opacity [0,1] — final post-multiplier on accumulated fog
+		float densityScale = 0.2f;   // fog density [0,1] — controls shape/concentration of hot spots
+		float sensorReach  = 5.0f;   // max spread radius per sensor (world units) — caps Gaussian sigma
+
+		// Runtime state (not serialized)
+		float elapsedTime = 0.0f;
+
+		constexpr bool IsEnabled() const { return _flags & ENABLED; }
+		constexpr void SetEnabled(bool value) { set_flag(_flags, ENABLED, value); }
+
+		void Serialize(wi::Archive& archive, wi::ecs::EntitySerializer& seri);
+	};
+
+	// IoT Simulator: drives a paired IoTSensorComponent value and/or its TransformComponent
+	// from a procedural pattern. Use this to exercise the heat map / cooling / diffusion
+	// pipeline before real IoT data is wired in.
+	//
+	// Attach to the SAME entity that holds IoTSensorComponent (value drive) and optionally
+	// TransformComponent (motion drive). All three cohabitate on one entity.
+	struct IoTSimulatorComponent
+	{
+		enum FLAGS
+		{
+			EMPTY = 0,
+			ENABLED = 1 << 0,
+			DRIVES_VALUE = 1 << 1,     // write pattern into IoTSensorComponent::sensorValue
+			DRIVES_TRANSFORM = 1 << 2, // write motion into TransformComponent::translation_local
+		};
+		uint32_t _flags = ENABLED | DRIVES_VALUE;
+
+		// === Value pattern ===
+		enum class ValueMode : uint32_t
+		{
+			SINE = 0,
+			RANDOM_WALK = 1, // Ornstein-Uhlenbeck mean-reverting noise
+			RAMP_HOLD = 2,   // linear ramp, then hold
+		};
+		ValueMode valueMode = ValueMode::SINE;
+		float offset = 50.0f;        // center value (raw sensor units, e.g. °C)
+		float amplitude = 30.0f;     // peak deviation above/below offset
+		float frequency = 0.25f;     // Hz (sine cycles per second)
+		float phase = 0.0f;          // radians phase offset (staggered sensors)
+		float meanReversion = 0.3f;  // OU kappa (per second) — high = snaps back fast
+		float rampDuration = 5.0f;   // seconds to reach offset+amplitude (RAMP_HOLD)
+
+		// === Motion pattern ===
+		enum class MotionMode : uint32_t
+		{
+			STATIC = 0,
+			ORBIT = 1,     // circle in XZ around motionCenter
+			PING_PONG = 2, // linear back-and-forth along +X of motionCenter
+		};
+		MotionMode motionMode = MotionMode::STATIC;
+		XMFLOAT3 motionCenter = XMFLOAT3(0, 0, 0); // anchor (world-space)
+		float motionRadius = 2.0f;                  // orbit radius / ping-pong half-length
+		float motionSpeed = 0.5f;                   // Hz (full cycle per second)
+
+		// Runtime state (not serialized)
+		float _runtime_time = 0.0f;       // seconds accumulated while enabled
+		float _runtime_value = 50.0f;     // last OU sample (seed state for random walk)
+		uint64_t _runtime_rng_state = 1;  // xorshift64* seed (auto-seeded on first tick)
+
+		constexpr bool IsEnabled() const { return _flags & ENABLED; }
+		constexpr bool DrivesValue() const { return _flags & DRIVES_VALUE; }
+		constexpr bool DrivesTransform() const { return _flags & DRIVES_TRANSFORM; }
+		constexpr void SetEnabled(bool value) { set_flag(_flags, ENABLED, value); }
+		constexpr void SetDrivesValue(bool value) { set_flag(_flags, DRIVES_VALUE, value); }
+		constexpr void SetDrivesTransform(bool value) { set_flag(_flags, DRIVES_TRANSFORM, value); }
+
+		void Serialize(wi::Archive& archive, wi::ecs::EntitySerializer& seri);
+	};
+
 }

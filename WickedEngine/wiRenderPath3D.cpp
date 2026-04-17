@@ -2240,6 +2240,12 @@ namespace wi
 			wi::profiler::EndRange(range); // Transparent Scene
 		}
 
+		// Heat map volume visualization (rasterized cube + ray-march in PS)
+		if (scene->volume_visualizers.GetCount() > 0)
+		{
+			wi::renderer::DrawHeatmap(cmd);
+		}
+
 		wi::renderer::DrawDebugWorld(*scene, *camera, *this, cmd);
 
 		wi::renderer::DrawWireframeOverlay(visibility_main, wi::enums::RENDERPASS_MAIN, cmd);
