@@ -2740,22 +2740,19 @@ namespace wi::scene
 		};
 		uint32_t _flags = ENABLED;
 
-		// Maps sensor values into [0,1] for the colormap
-		float valueRangeMin = 0.0f;
-		float valueRangeMax = 100.0f;
+		// Value → colormap mapping
+		float valueRangeMin = 0.0f;   // sensor value that maps to the cold end of the gradient
+		float valueRangeMax = 100.0f; // sensor value that maps to the hot end
 
-		// Background fill: areas not influenced by any sensor get this raw value.
-		// This is what creates the "cool blue background, hot red spots" contrast.
-		// Set to a low value (e.g., near valueRangeMin) for cool background.
-		float ambientValue = 20.0f;
+		// Spread shape (how the heat field evolves)
+		float diffusionAlpha = 0.5f;  // Gaussian sigma growth rate (heat diffusion coefficient)
+		float sensorReach    = 5.0f;  // world-units cap on per-sensor spread
+		float edgeSharpness  = 1.0f;  // blend-zone width — 1 = soft Gaussian, >1 = sharper territory boundaries
 
-		// Diffusion parameters
-		float diffusionAlpha = 0.5f; // higher = faster spread
-		float opacityScale = 1.0f;   // fog opacity [0,1] — final post-multiplier on accumulated fog
-		float densityScale = 0.2f;   // fog density [0,1] — controls shape/concentration of hot spots
-		float sensorReach  = 5.0f;   // max spread radius per sensor (world units) — caps Gaussian sigma
-		float edgeSharpness = 1.0f;  // blend-zone width between sensors. 1 = soft Gaussian, >1 = sharper edges
-		float emissivePower = 1.5f;  // HDR color multiplier — >1 pushes fog into bloom, making it look self-illuminated
+		// Visual strength
+		float opacityScale   = 1.0f;  // [0,1] post-multiplier on the final accumulated fog
+		float densityScale   = 0.2f;  // [0,1] per-step alpha contribution
+		float emissivePower  = 1.5f;  // HDR color multiplier — >1 blooms the fog
 
 		// Runtime state (not serialized)
 		float elapsedTime = 0.0f;

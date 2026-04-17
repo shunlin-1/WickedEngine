@@ -31,6 +31,7 @@
     <None Include="$(MSBuildThisFileDirectory)fxaa.hlsli" />
     <None Include="$(MSBuildThisFileDirectory)globals.hlsli" />
     <None Include="$(MSBuildThisFileDirectory)hairparticleHF.hlsli" />
+    <None Include="$(MSBuildThisFileDirectory)heatmap_shared.hlsli" />
     <None Include="$(MSBuildThisFileDirectory)icosphere.hlsli" />
     <None Include="$(MSBuildThisFileDirectory)imageHF.hlsli" />
     <None Include="$(MSBuildThisFileDirectory)impostorHF.hlsli" />

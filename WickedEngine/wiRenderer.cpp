@@ -4180,6 +4180,10 @@ void UpdateVisibility(Visibility& vis)
 
 	wi::profiler::EndRange(range); // Frustum Culling
 }
+
+// Forward declaration — full definition lives near DrawHeatmap for locality.
+void UpdateHeatmapFrameCB(const wi::scene::Scene& scene, FrameCB& frameCB);
+
 void UpdatePerFrameData(
 	Scene& scene,
 	const Visibility& vis,
@@ -4436,75 +4440,9 @@ void UpdatePerFrameData(
 	frameCB.texture_wind_prev_index = device->GetDescriptorIndex(&textures[TEXTYPE_3D_WIND_PREV], SubresourceType::SRV);
 	frameCB.texture_caustics_index = device->GetDescriptorIndex(&textures[TEXTYPE_2D_CAUSTICS], SubresourceType::SRV);
 
-	// Heat map: register the 3D texture descriptor so PS can sample it via bindless lookup.
-	frameCB.scene.heatmap.texture_index = device->GetDescriptorIndex(&textures[TEXTYPE_3D_HEATMAP], SubresourceType::SRV);
-
-	// Fill heat map sensor data from the scene's ECS components.
-	// Defaults: disabled. Will be enabled if we find a valid visualizer.
-	frameCB.scene.heatmap.enabled = 0;
-	frameCB.scene.heatmap.sensor_count = 0;
-	frameCB.scene.heatmap.resolution = textures[TEXTYPE_3D_HEATMAP].GetDesc().width;
-
-	// === HEATMAP DATA GATHERING ===
-	// Find the first enabled VolumeVisualizerComponent and gather its sensor data.
-	{
-		const wi::scene::Scene& scene = *vis.scene;
-		for (size_t i = 0; i < scene.volume_visualizers.GetCount(); ++i)
-		{
-			const wi::scene::VolumeVisualizerComponent& visualizer = scene.volume_visualizers[i];
-			if (!visualizer.IsEnabled()) continue;
-
-			wi::ecs::Entity visEntity = scene.volume_visualizers.GetEntity(i);
-			const wi::scene::TransformComponent* visTransform = scene.transforms.GetComponent(visEntity);
-			if (visTransform == nullptr) continue;
-
-			// Store world matrix and its inverse
-			XMMATRIX worldMat = XMLoadFloat4x4(&visTransform->world);
-			XMMATRIX worldMatInv = XMMatrixInverse(nullptr, worldMat);
-			XMStoreFloat4x4(&frameCB.scene.heatmap.world_matrix, worldMat);
-			XMStoreFloat4x4(&frameCB.scene.heatmap.world_matrix_inverse, worldMatInv);
-
-			frameCB.scene.heatmap.diffusion_alpha = visualizer.diffusionAlpha;
-			frameCB.scene.heatmap.elapsed_time = visualizer.elapsedTime;
-			frameCB.scene.heatmap.opacity_scale = visualizer.opacityScale;
-			frameCB.scene.heatmap.density_scale = visualizer.densityScale;
-			frameCB.scene.heatmap.sensor_reach = visualizer.sensorReach;
-			frameCB.scene.heatmap.edge_sharpness = visualizer.edgeSharpness;
-			frameCB.scene.heatmap.emissive_power = visualizer.emissivePower;
-
-			// Gather IoT sensors (up to 8). Normalize values to [0,1] using the range.
-			float range = visualizer.valueRangeMax - visualizer.valueRangeMin;
-
-			// Normalize ambient value the same way as sensors so it maps to the same gradient
-			float ambientNorm = (range > 0.0001f)
-				? (visualizer.ambientValue - visualizer.valueRangeMin) / range
-				: 0.0f;
-			frameCB.scene.heatmap.ambient_value = std::max(0.0f, std::min(1.0f, ambientNorm));
-			uint32_t count = 0;
-			for (size_t s = 0; s < scene.iot_sensors.GetCount() && count < 8; ++s)
-			{
-				const wi::scene::IoTSensorComponent& sensor = scene.iot_sensors[s];
-				if (!sensor.IsEnabled()) continue;
-
-				wi::ecs::Entity sensorEntity = scene.iot_sensors.GetEntity(s);
-				const wi::scene::TransformComponent* sensorTransform = scene.transforms.GetComponent(sensorEntity);
-				if (sensorTransform == nullptr) continue;
-
-				XMFLOAT3 wp = sensorTransform->GetPosition();
-				float normalized = (range > 0.0001f) ? (sensor.sensorValue - visualizer.valueRangeMin) / range : 0.5f;
-				normalized = std::max(0.0f, std::min(1.0f, normalized));
-
-				frameCB.scene.heatmap.sensors[count].x = wp.x;
-				frameCB.scene.heatmap.sensors[count].y = wp.y;
-				frameCB.scene.heatmap.sensors[count].z = wp.z;
-				frameCB.scene.heatmap.sensors[count].w = normalized;
-				count++;
-			}
-			frameCB.scene.heatmap.sensor_count = count;
-			frameCB.scene.heatmap.enabled = 1;
-			break; // only the first visualizer
-		}
-	}
+	// IoT heatmap: populate the per-frame shader data from the scene's
+	// VolumeVisualizer + IoTSensor components. Helper defined further down.
+	UpdateHeatmapFrameCB(*vis.scene, frameCB);
 
 	// See if indirect debug buffer needs to be resized:
 	if (indirectDebugStatsReadback_available[device->GetBufferIndex()] && indirectDebugStatsReadback[device->GetBufferIndex()].mapped_data != nullptr)
@@ -19241,16 +19179,82 @@ void DrawVoxelGrid(const wi::VoxelGrid* voxelgrid)
 {
 	renderableVoxelgrids.push_back(voxelgrid);
 }
+// =============================================================================
+// IoT volumetric heatmap — per-frame population + draw
+// -----------------------------------------------------------------------------
+// The heatmap is driven by two ECS components:
+//   - VolumeVisualizerComponent : bounding box + render params (one active)
+//   - IoTSensorComponent        : up to 8 sensor points fed into the CS
+// The compute dispatch (heatmapCS) runs in UpdateRenderData; the draw (heatmapPS
+// over a unit cube) runs from RenderPath3D's transparent pass via DrawHeatmap.
+// =============================================================================
+
+void UpdateHeatmapFrameCB(const wi::scene::Scene& scene, FrameCB& frameCB)
+{
+	// Defaults — disabled. Set to enabled only if we find an active visualizer.
+	frameCB.scene.heatmap.texture_index = device->GetDescriptorIndex(&textures[TEXTYPE_3D_HEATMAP], SubresourceType::SRV);
+	frameCB.scene.heatmap.enabled = 0;
+	frameCB.scene.heatmap.sensor_count = 0;
+	frameCB.scene.heatmap.resolution = textures[TEXTYPE_3D_HEATMAP].GetDesc().width;
+
+	// Find the first enabled visualizer with a valid transform.
+	for (size_t i = 0; i < scene.volume_visualizers.GetCount(); ++i)
+	{
+		const wi::scene::VolumeVisualizerComponent& visualizer = scene.volume_visualizers[i];
+		if (!visualizer.IsEnabled()) continue;
+
+		wi::ecs::Entity visEntity = scene.volume_visualizers.GetEntity(i);
+		const wi::scene::TransformComponent* visTransform = scene.transforms.GetComponent(visEntity);
+		if (visTransform == nullptr) continue;
+
+		// Transform + inverse for world↔local conversion in the shaders.
+		XMMATRIX worldMat = XMLoadFloat4x4(&visTransform->world);
+		XMMATRIX worldMatInv = XMMatrixInverse(nullptr, worldMat);
+		XMStoreFloat4x4(&frameCB.scene.heatmap.world_matrix, worldMat);
+		XMStoreFloat4x4(&frameCB.scene.heatmap.world_matrix_inverse, worldMatInv);
+
+		// Per-visualizer parameters.
+		frameCB.scene.heatmap.diffusion_alpha = visualizer.diffusionAlpha;
+		frameCB.scene.heatmap.elapsed_time    = visualizer.elapsedTime;
+		frameCB.scene.heatmap.opacity_scale   = visualizer.opacityScale;
+		frameCB.scene.heatmap.density_scale   = visualizer.densityScale;
+		frameCB.scene.heatmap.sensor_reach    = visualizer.sensorReach;
+		frameCB.scene.heatmap.edge_sharpness  = visualizer.edgeSharpness;
+		frameCB.scene.heatmap.emissive_power  = visualizer.emissivePower;
+
+		// Gather up to 8 active IoT sensors, normalizing each value into [0,1]
+		// against the visualizer's range.
+		const float range = visualizer.valueRangeMax - visualizer.valueRangeMin;
+		uint32_t count = 0;
+		for (size_t s = 0; s < scene.iot_sensors.GetCount() && count < 8; ++s)
+		{
+			const wi::scene::IoTSensorComponent& sensor = scene.iot_sensors[s];
+			if (!sensor.IsEnabled()) continue;
+
+			wi::ecs::Entity sensorEntity = scene.iot_sensors.GetEntity(s);
+			const wi::scene::TransformComponent* sensorTransform = scene.transforms.GetComponent(sensorEntity);
+			if (sensorTransform == nullptr) continue;
+
+			const XMFLOAT3 wp = sensorTransform->GetPosition();
+			float normalized = (range > 0.0001f) ? (sensor.sensorValue - visualizer.valueRangeMin) / range : 0.5f;
+			normalized = std::max(0.0f, std::min(1.0f, normalized));
+
+			frameCB.scene.heatmap.sensors[count] = XMFLOAT4(wp.x, wp.y, wp.z, normalized);
+			count++;
+		}
+		frameCB.scene.heatmap.sensor_count = count;
+		frameCB.scene.heatmap.enabled = 1;
+		break; // only the first active visualizer renders
+	}
+}
+
 void DrawHeatmap(CommandList cmd)
 {
-	// Skip if no visualizer in the scene (heatmap.enabled would be 0)
-	// We can detect this by checking the frameCB.scene.heatmap.enabled flag
-	// but since this is dispatched from the render path, we just trust the caller
-	// (the render path checks volume_visualizers.GetCount() before calling).
+	// Caller (RenderPath3D) already guards on scene.volume_visualizers.GetCount() > 0,
+	// so we trust them and unconditionally draw. Shader early-discards on enabled=0.
 	device->EventBegin("Heatmap Volume", cmd);
 	device->BindPipelineState(&PSO_heatmap, cmd);
-	// 36 vertices = 6 faces * 2 triangles * 3 vertices, sourced from cube.hlsli in the VS
-	device->Draw(36, 0, cmd);
+	device->Draw(36, 0, cmd); // 36 verts = cube from cube.hlsli sourced in the VS
 	device->EventEnd(cmd);
 }
 void DrawPathQuery(const wi::PathQuery* pathquery)

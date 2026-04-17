@@ -3721,11 +3721,10 @@ namespace wi::scene
 			archive >> valueRangeMin;
 			archive >> valueRangeMax;
 			archive >> diffusionAlpha;
-			archive >> opacityScale;
-			archive >> ambientValue;
-			archive >> densityScale;
 			archive >> sensorReach;
 			archive >> edgeSharpness;
+			archive >> opacityScale;
+			archive >> densityScale;
 			archive >> emissivePower;
 		}
 		else
@@ -3734,11 +3733,10 @@ namespace wi::scene
 			archive << valueRangeMin;
 			archive << valueRangeMax;
 			archive << diffusionAlpha;
-			archive << opacityScale;
-			archive << ambientValue;
-			archive << densityScale;
 			archive << sensorReach;
 			archive << edgeSharpness;
+			archive << opacityScale;
+			archive << densityScale;
 			archive << emissivePower;
 		}
 	}

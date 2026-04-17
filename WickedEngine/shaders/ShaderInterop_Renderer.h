@@ -63,29 +63,37 @@ struct alignas(16) ShaderScene
 
 	ShaderVoxelGrid voxelgrid;
 
-	// Heat map system: data is filled by wi::renderer::UpdateFrameCB and read by heatmapCS
-	// All sensors are in WORLD space; the CS converts to local using world_matrix_inverse
+	// IoT heatmap shader-side data. Filled by wi::renderer::UpdateFrameCB from
+	// VolumeVisualizerComponent + IoTSensorComponent. Read by heatmapCS (writes
+	// the 3D density texture) and heatmapPS (ray-marches + composites).
+	//
+	// All sensor positions are WORLD-space; the CS converts to LOCAL using
+	// world_matrix_inverse. Sensor values are pre-normalized to [0,1] against
+	// the visualizer's valueRangeMin/Max.
 	struct alignas(16) ShaderHeatmap
 	{
 		float4x4 world_matrix;          // visualizer box world transform
-		float4x4 world_matrix_inverse;  // inverse, for world->local conversion in CS
+		float4x4 world_matrix_inverse;  // world → local [-1, 1]
 
 		float4 sensors[8];              // xyz = world position, w = normalized [0,1] value
 
-		uint sensor_count;              // 0..8
-		uint resolution;                // 3D texture dimension (e.g., 64)
-		float diffusion_alpha;          // controls Gaussian spread
-		float elapsed_time;             // accumulated time since last reset
+		// Counts + timing (16 bytes)
+		uint sensor_count;              // 0..8, matches sensors array fill
+		uint resolution;                // 3D texture dimension (e.g. 64)
+		float diffusion_alpha;          // Gaussian sigma growth rate
+		float elapsed_time;             // seconds since last reset
 
-		int texture_index;              // bindless descriptor for the 3D heatmap texture
-		uint enabled;                   // 0 = no visualizer in scene, 1 = active
-		float ambient_value;            // normalized [0,1] background fill color
-		float opacity_scale;            // [0,1] post-multiplier on accumulated fog (visibility fade)
+		// Output texture + overall visibility (16 bytes)
+		int texture_index;              // bindless descriptor index of the 3D heatmap texture
+		uint enabled;                   // 0 = no visualizer active, 1 = active
+		float opacity_scale;            // [0,1] post-multiplier on accumulated fog
+		float density_scale;            // [0,1] per-step alpha contribution
 
-		float density_scale;            // [0,1] per-step alpha contribution (hot-spot sharpness)
+		// Spatial shape + look (16 bytes)
 		float sensor_reach;             // world-units cap on per-sensor Gaussian spread
-		float edge_sharpness;           // pow() on per-sensor weight — narrows/softens blend zones
+		float edge_sharpness;           // pow() on per-sensor weight — narrows blend zones
 		float emissive_power;           // HDR color multiplier — >1 blooms the fog
+		uint _padding;
 	};
 	ShaderHeatmap heatmap;
 };

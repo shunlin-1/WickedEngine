@@ -1,16 +1,26 @@
 #include "globals.hlsli"
+#include "heatmap_shared.hlsli"
 
-// Output: the 3D heat map texture (R16_FLOAT, 64^3)
-// Each voxel stores normalized [0,1] value mapping to the colormap.
-// The ENTIRE box gets filled — empty areas use the ambient value.
+// Writes a 3D scalar field of normalized sensor values [0,1] mapped
+// into [DENSITY_MIN, 1.0] for "sensor-touched" voxels and 0.0 for
+// "empty" voxels. The offset lets the PS gate on a simple > DENSITY_GATE
+// check to distinguish presence without false-rejecting low-value sensors.
 RWTexture3D<float> output : register(u0);
+
+// Floor on Gaussian sigma so sensors remain at least pixel-sized even
+// right after a Reset Diffusion Time (avoids a 1-frame invisible blip).
+static const float SIGMA_FLOOR = 0.05;
+
+// Minimum totalWeight to count a voxel as "sensor-touched". Below this,
+// the voxel is treated as empty. Chosen tiny so the rendered region
+// reaches ~3 sigma from the nearest sensor before cutting off.
+static const float EMPTY_WEIGHT_THRESHOLD = 0.0001;
 
 [numthreads(8, 8, 8)]
 void main(uint3 DTid : SV_DispatchThreadID)
 {
 	const ShaderScene::ShaderHeatmap heatmap = GetScene().heatmap;
 
-	// Skip if no visualizer at all
 	if (heatmap.enabled == 0)
 	{
 		output[DTid] = 0.0;
@@ -20,27 +30,23 @@ void main(uint3 DTid : SV_DispatchThreadID)
 	if (DTid.x >= heatmap.resolution || DTid.y >= heatmap.resolution || DTid.z >= heatmap.resolution)
 		return;
 
-	// Convert voxel coordinate to LOCAL space [-1, 1]
+	// Voxel coordinate → local [-1, 1] → world
 	float3 uvw = (float3(DTid) + 0.5) / float(heatmap.resolution);
 	float3 localPos = uvw * 2.0 - 1.0;
-
-	// Convert to world space to compare against sensor world positions
 	float3 worldPos = mul(heatmap.world_matrix, float4(localPos, 1.0)).xyz;
 
-	// Gaussian spread: starts as a tiny dot at the sensor and grows over time.
-	// Following the heat diffusion equation: sigma = sqrt(2 * alpha * t).
-	// Capped by heatmap.sensor_reach (editor slider) so a single sensor's
-	// influence stays localized even after long run-time.
+	// Gaussian sigma from heat diffusion equation: sigma = sqrt(2 * alpha * t),
+	// capped by sensor_reach so a single sensor's influence stays localized
+	// even at long run-time (prevents "every change looks like ambient shift").
 	float sg = min(heatmap.sensor_reach, sqrt(2.0 * heatmap.diffusion_alpha * max(heatmap.elapsed_time, 0.001)));
-	sg = max(0.05, sg);
+	sg = max(SIGMA_FLOOR, sg);
 	float s2 = 2.0 * sg * sg;
 
-	// No ambient fill — empty space stays empty. Sensor values blend naturally
-	// where they meet, and voxels far from any sensor get totalWeight ~= 0
-	// which we collapse to 0 output (PS proximity check makes them transparent).
+	// Weighted-blend of all active sensors using power-weighted Gaussian.
+	// edge_sharpness = 1 → pure Gaussian (soft). >1 → narrow blend zones (sensors
+	// hold color, sharp territory boundaries). <1 → very soft smear.
 	float totalWeight = 0.0;
 	float weightedSum = 0.0;
-
 	[unroll]
 	for (uint s = 0; s < 8; s++)
 	{
@@ -48,24 +54,18 @@ void main(uint3 DTid : SV_DispatchThreadID)
 
 		float3 diff = worldPos - heatmap.sensors[s].xyz;
 		float dist2 = dot(diff, diff);
-		// pow(gaussian, sharpness): sharpness=1 gives pure Gaussian (soft),
-		// sharpness>1 narrows blend zones (sensors hold color with sharper edges),
-		// sharpness<1 widens them (very soft, everything blends).
 		float w = pow(exp(-dist2 / s2), heatmap.edge_sharpness);
 
 		totalWeight += w;
 		weightedSum += w * heatmap.sensors[s].w;
 	}
 
-	// Guard: voxels with no sensor nearby stay at 0 (pure "empty" sentinel).
-	// Otherwise remap the [0,1] value into [0.02, 1.0] so even a value-0 sensor
-	// writes density well above the PS gate threshold (0.005). Without this
-	// offset, a low-value sensor's density sits right on top of the threshold
-	// and its visible region shrinks asymmetrically vs high-value sensors.
-	if (totalWeight > 0.0001)
+	// Remap [0, 1] value into [DENSITY_MIN, 1] to keep low-value sensors
+	// safely above the PS gate; empty voxels write pure 0.
+	if (totalWeight > EMPTY_WEIGHT_THRESHOLD)
 	{
 		float t = saturate(weightedSum / totalWeight);
-		output[DTid] = 0.02 + t * 0.98;
+		output[DTid] = EncodeDensity(t);
 	}
 	else
 	{

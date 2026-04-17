@@ -1,4 +1,5 @@
 #include "globals.hlsli"
+#include "heatmap_shared.hlsli"
 
 struct VertexToPixel
 {
@@ -6,21 +7,32 @@ struct VertexToPixel
 	float3 worldPos : WORLDPOSITION;
 };
 
-// Inferno-like colormap with emissive boost: t in [0,1] -> color
-// 0=cool (blue), 0.5=warm (yellow), 1=hot (red)
-// The emissive boost makes the fog look self-illuminating instead of flat lit.
+// ============================================================
+// Tunables — adjust these to change the overall look, not the
+// editor-exposed per-visualizer values.
+// ============================================================
+static const uint  RAY_MAX_STEPS        = 64;
+static const float EARLY_OUT_ALPHA      = 0.95;  // stop marching once fog is this opaque
+static const float DISCARD_ALPHA        = 0.001; // final pixel-cull threshold
+static const float DENSITY_STRENGTH_MAX = 30.0;  // internal multiplier on density_scale^2
+
+// ============================================================
+// Inferno-like colormap with HDR tails. t ∈ [0, 1] → RGB.
+// The *1.2 / *1.5 values in the top ends push pixel brightness
+// over 1.0, which Wicked's tonemap + bloom picks up.
+// ============================================================
 float3 HeatColormap(float t)
 {
 	t = saturate(t);
 	float3 color;
-	if (t < 0.25)      color = lerp(float3(0.30, 0.60, 1.20), float3(0.40, 1.10, 0.80), t * 4.0);
-	else if (t < 0.50) color = lerp(float3(0.40, 1.10, 0.80), float3(1.20, 1.20, 0.40), (t - 0.25) * 4.0);
-	else if (t < 0.75) color = lerp(float3(1.20, 1.20, 0.40), float3(1.40, 0.70, 0.15), (t - 0.50) * 4.0);
-	else               color = lerp(float3(1.40, 0.70, 0.15), float3(1.50, 0.20, 0.20), (t - 0.75) * 4.0);
+	if      (t < 0.25) color = lerp(float3(0.30, 0.60, 1.20), float3(0.40, 1.10, 0.80),  t        * 4.0);
+	else if (t < 0.50) color = lerp(float3(0.40, 1.10, 0.80), float3(1.20, 1.20, 0.40), (t - 0.25)* 4.0);
+	else if (t < 0.75) color = lerp(float3(1.20, 1.20, 0.40), float3(1.40, 0.70, 0.15), (t - 0.50)* 4.0);
+	else               color = lerp(float3(1.40, 0.70, 0.15), float3(1.50, 0.20, 0.20), (t - 0.75)* 4.0);
 	return color;
 }
 
-// Ray-box intersection in local space [-1, 1]
+// Slab-method AABB intersection in the volume's local [-1, 1] space.
 bool RayBoxIntersect(float3 ro, float3 rd, out float tNear, out float tFar)
 {
 	float3 t1 = (-1.0 - ro) / rd;
@@ -32,6 +44,19 @@ bool RayBoxIntersect(float3 ro, float3 rd, out float tNear, out float tFar)
 	return tNear < tFar && tFar > 0.0;
 }
 
+// Fast min-distance from sample to any active sensor in world space.
+// Used as a proximity gate so empty-space sampler bleed doesn't render.
+float MinDistSqToSensor(float3 worldPos, ShaderScene::ShaderHeatmap hm)
+{
+	float minDistSq = 1e20;
+	for (uint s = 0; s < hm.sensor_count; s++)
+	{
+		float3 d = worldPos - hm.sensors[s].xyz;
+		minDistSq = min(minDistSq, dot(d, d));
+	}
+	return minDistSq;
+}
+
 float4 main(VertexToPixel input) : SV_TARGET
 {
 	const ShaderScene::ShaderHeatmap heatmap = GetScene().heatmap;
@@ -39,22 +64,11 @@ float4 main(VertexToPixel input) : SV_TARGET
 	if (heatmap.enabled == 0 || heatmap.texture_index < 0)
 		discard;
 
-	// Build ray in world space
+	// World-space ray from camera through this pixel's cube-face position.
 	float3 camPos = GetCamera().position;
 	float3 rayDirWorld = normalize(input.worldPos - camPos);
 
-	// === Scene depth (kept for later surface-glow use; not used to clip anymore) ===
-	// Previously we stopped ray-marching at the nearest solid surface. That
-	// made meshes INSIDE the volume hide the fog behind them — the "emission
-	// didn't cover the model" problem. Letting the ray march through the
-	// whole volume lets the fog visibly envelop meshes placed inside, which
-	// is the "shiny fog on the model" look we want.
-	float2 screenUV = input.pos.xy * GetCamera().internal_resolution_rcp;
-	float sceneDepth = texture_depth.SampleLevel(sampler_point_clamp, screenUV, 0);
-	float3 sceneWorldPos = reconstruct_position(screenUV, sceneDepth);
-	float sceneDistance = distance(camPos, sceneWorldPos);
-
-	// Convert ray to local box space [-1, 1]
+	// Local-space ray for box intersection and texture lookup.
 	float3 localCamPos = mul(heatmap.world_matrix_inverse, float4(camPos, 1.0)).xyz;
 	float3 localRayDir = normalize(mul((float3x3)heatmap.world_matrix_inverse, rayDirWorld));
 
@@ -63,75 +77,48 @@ float4 main(VertexToPixel input) : SV_TARGET
 		discard;
 	tNear = max(tNear, 0.0);
 
-	// To convert local-space distance back to world distance, account for the matrix scale.
-	// The local ray dir is normalized in local space; we need its length in world space:
-	float3 worldStep = mul((float3x3)heatmap.world_matrix, localRayDir);
-	float localToWorldScale = length(worldStep);
-
-	// Bindless 3D texture lookup (sample as float4, take .r — engine bindless arrays default to float4)
 	Texture3D heatmapTex = bindless_textures3D[descriptor_index(heatmap.texture_index)];
 
-	const uint MAX_STEPS = 64;
-	float stepSize = (tFar - tNear) / float(MAX_STEPS);
+	float stepSize = (tFar - tNear) / float(RAY_MAX_STEPS);
 	float jitter = frac(sin(dot(input.pos.xy, float2(12.9898, 78.233))) * 43758.5453);
+
+	// Pre-computed density strength (squared curve for fine control at the low end).
+	float densityStrength = heatmap.density_scale * heatmap.density_scale * DENSITY_STRENGTH_MAX;
+	float visibilitySigma2 = heatmap.sensor_reach * heatmap.sensor_reach * 2.0;
 
 	float4 accum = float4(0, 0, 0, 0);
 
 	[loop]
-	for (uint i = 0; i < MAX_STEPS; i++)
+	for (uint i = 0; i < RAY_MAX_STEPS; i++)
 	{
-		if (accum.a >= 0.95) break;
+		if (accum.a >= EARLY_OUT_ALPHA) break;
 
 		float t = tNear + (float(i) + jitter) * stepSize;
-
-		// No scene-depth break: we march the full volume so fog envelops meshes
-		// placed inside. The scene is rendered first and the fog is composited
-		// with alpha, so dense fog dims the mesh (shiny wrap-around look) and
-		// thin fog tints it without hiding it.
-
 		float3 samplePosLocal = localCamPos + localRayDir * t;
-		float3 uvw = samplePosLocal * 0.5 + 0.5; // [-1,1] -> [0,1] for texture
+		float3 uvw = samplePosLocal * 0.5 + 0.5;
 
-		float sampledDensity = heatmapTex.SampleLevel(sampler_linear_clamp, uvw, 0).r;
+		float encoded = heatmapTex.SampleLevel(sampler_linear_clamp, uvw, 0).r;
+		if (encoded <= DENSITY_GATE)
+			continue;
 
-		if (sampledDensity > 0.005)
-		{
-			// CS writes [0.02, 1.0] for sensor-influenced voxels and 0.0 for empty.
-			// Invert the CS's offset so t01 recovers the original [0,1] value.
-			float t01 = saturate((sampledDensity - 0.02) / 0.98);
-			// HDR emissive boost — color is already HDR (>1 at hot end), this pushes
-			// it further into bloom range so the fog feels self-illuminated.
-			float3 color = HeatColormap(t01) * heatmap.emissive_power;
+		// Decode → colormap → HDR boost
+		float  t01   = DecodeDensity(encoded);
+		float3 color = HeatColormap(t01) * heatmap.emissive_power;
 
-			// Visibility = proximity to nearest sensor (kept so empty space is transparent
-			// even though the density texture may be non-zero due to sampler bleed).
-			float3 samplePosWorld = mul(heatmap.world_matrix, float4(samplePosLocal, 1.0)).xyz;
-			float minDistSq = 1e20;
-			for (uint s = 0; s < heatmap.sensor_count; s++)
-			{
-				float3 d = samplePosWorld - heatmap.sensors[s].xyz;
-				minDistSq = min(minDistSq, dot(d, d));
-			}
-			float visibilityRadius = heatmap.sensor_reach;
-			float proximity = exp(-minDistSq / (visibilityRadius * visibilityRadius * 2.0));
-			float intensity = saturate(proximity);
+		// Proximity-based visibility: empty cells that bled through the sampler
+		// stay transparent; cells near a sensor are fully visible.
+		float3 samplePosWorld = mul(heatmap.world_matrix, float4(samplePosLocal, 1.0)).xyz;
+		float minDistSq = MinDistSqToSensor(samplePosWorld, heatmap);
+		float intensity = saturate(exp(-minDistSq / visibilitySigma2));
 
-			// DENSITY = per-step alpha contribution. Squared curve for fine low-end control.
-			float densityStrength = heatmap.density_scale * heatmap.density_scale * 30.0;
-			float alpha = intensity * densityStrength * stepSize;
-			alpha = saturate(alpha);
+		float alpha = saturate(intensity * densityStrength * stepSize);
 
-			accum.rgb += (1.0 - accum.a) * color * alpha;
-			accum.a   += (1.0 - accum.a) * alpha;
-		}
+		accum.rgb += (1.0 - accum.a) * color * alpha;
+		accum.a   += (1.0 - accum.a) * alpha;
 	}
 
-	if (accum.a < 0.001) discard;
+	if (accum.a < DISCARD_ALPHA) discard;
 
-	// OPACITY = final post-multiplier on accumulated fog. Applied to both RGB and A
-	// because the accumulation is premultiplied. At 1.0 you see full fog; at 0.3
-	// the same fog shape is 30% visible (everything fades uniformly).
-	accum *= heatmap.opacity_scale;
-
-	return accum;
+	// Final opacity multiplier — fades the whole fog uniformly without changing shape.
+	return accum * heatmap.opacity_scale;
 }
