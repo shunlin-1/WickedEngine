@@ -15,6 +15,8 @@ public:
 	wi::gui::Slider rangeMaxSlider;
 	wi::gui::Slider diffusionSlider;
 	wi::gui::Slider sensorReachSlider;
+	wi::gui::Slider edgeSharpnessSlider;
+	wi::gui::Slider emissivePowerSlider;
 	wi::gui::Slider opacitySlider;
 	wi::gui::Slider densitySlider;
 	wi::gui::Button resetButton;

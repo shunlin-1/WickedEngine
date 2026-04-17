@@ -4469,6 +4469,8 @@ void UpdatePerFrameData(
 			frameCB.scene.heatmap.opacity_scale = visualizer.opacityScale;
 			frameCB.scene.heatmap.density_scale = visualizer.densityScale;
 			frameCB.scene.heatmap.sensor_reach = visualizer.sensorReach;
+			frameCB.scene.heatmap.edge_sharpness = visualizer.edgeSharpness;
+			frameCB.scene.heatmap.emissive_power = visualizer.emissivePower;
 
 			// Gather IoT sensors (up to 8). Normalize values to [0,1] using the range.
 			float range = visualizer.valueRangeMax - visualizer.valueRangeMin;

@@ -2754,6 +2754,8 @@ namespace wi::scene
 		float opacityScale = 1.0f;   // fog opacity [0,1] — final post-multiplier on accumulated fog
 		float densityScale = 0.2f;   // fog density [0,1] — controls shape/concentration of hot spots
 		float sensorReach  = 5.0f;   // max spread radius per sensor (world units) — caps Gaussian sigma
+		float edgeSharpness = 1.0f;  // blend-zone width between sensors. 1 = soft Gaussian, >1 = sharper edges
+		float emissivePower = 1.5f;  // HDR color multiplier — >1 pushes fog into bloom, making it look self-illuminated
 
 		// Runtime state (not serialized)
 		float elapsedTime = 0.0f;

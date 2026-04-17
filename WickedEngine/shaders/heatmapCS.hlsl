@@ -48,16 +48,27 @@ void main(uint3 DTid : SV_DispatchThreadID)
 
 		float3 diff = worldPos - heatmap.sensors[s].xyz;
 		float dist2 = dot(diff, diff);
-		float w = exp(-dist2 / s2);
+		// pow(gaussian, sharpness): sharpness=1 gives pure Gaussian (soft),
+		// sharpness>1 narrows blend zones (sensors hold color with sharper edges),
+		// sharpness<1 widens them (very soft, everything blends).
+		float w = pow(exp(-dist2 / s2), heatmap.edge_sharpness);
 
 		totalWeight += w;
 		weightedSum += w * heatmap.sensors[s].w;
 	}
 
-	// Guard against division by zero where no sensor reaches this voxel.
-	float t = (totalWeight > 0.0001) ? (weightedSum / totalWeight) : 0.0;
-
-	// Output the normalized color value [0,1]. No +0.01 offset anymore —
-	// empty cells write 0 and are skipped by the PS threshold.
-	output[DTid] = saturate(t);
+	// Guard: voxels with no sensor nearby stay at 0 (pure "empty" sentinel).
+	// Otherwise remap the [0,1] value into [0.02, 1.0] so even a value-0 sensor
+	// writes density well above the PS gate threshold (0.005). Without this
+	// offset, a low-value sensor's density sits right on top of the threshold
+	// and its visible region shrinks asymmetrically vs high-value sensors.
+	if (totalWeight > 0.0001)
+	{
+		float t = saturate(weightedSum / totalWeight);
+		output[DTid] = 0.02 + t * 0.98;
+	}
+	else
+	{
+		output[DTid] = 0.0;
+	}
 }

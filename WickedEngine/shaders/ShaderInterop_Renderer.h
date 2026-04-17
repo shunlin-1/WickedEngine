@@ -84,8 +84,8 @@ struct alignas(16) ShaderScene
 
 		float density_scale;            // [0,1] per-step alpha contribution (hot-spot sharpness)
 		float sensor_reach;             // world-units cap on per-sensor Gaussian spread
-		uint padding_hm2;
-		uint padding_hm3;
+		float edge_sharpness;           // pow() on per-sensor weight — narrows/softens blend zones
+		float emissive_power;           // HDR color multiplier — >1 blooms the fog
 	};
 	ShaderHeatmap heatmap;
 };

@@ -70,6 +70,20 @@ void VolumeVisWindow::Create(EditorComponent* _editor)
 	}));
 	AddWidget(&sensorReachSlider);
 
+	edgeSharpnessSlider.Create(0.2f, 10.0f, 1.0f, 1000, "Edge Sharpness: ");
+	edgeSharpnessSlider.SetTooltip("How wide is the blend zone between sensors. 1 = soft Gaussian (default), higher = sharper territory boundaries (each sensor holds color until a narrow edge), lower = very smooth smear.");
+	edgeSharpnessSlider.OnSlide(forEachSelected([](VolumeVisualizerComponent* v, wi::gui::EventArgs args) {
+		v->edgeSharpness = args.fValue;
+	}));
+	AddWidget(&edgeSharpnessSlider);
+
+	emissivePowerSlider.Create(0.0f, 8.0f, 1.5f, 1000, "Emissive: ");
+	emissivePowerSlider.SetTooltip("HDR brightness multiplier. 0 = no light, 1 = normal color, >1 pushes into bloom so the fog glows like it's self-illuminated. 1.5-3.0 gives a nice heat-shimmer look.");
+	emissivePowerSlider.OnSlide(forEachSelected([](VolumeVisualizerComponent* v, wi::gui::EventArgs args) {
+		v->emissivePower = args.fValue;
+	}));
+	AddWidget(&emissivePowerSlider);
+
 	opacitySlider.Create(0.0f, 1.0f, 1.0f, 1000, "Opacity: ");
 	opacitySlider.SetTooltip("Final fog visibility multiplier. 1.0 = full, 0.3 = 30% visible (fades the whole effect uniformly while keeping the shape).");
 	opacitySlider.OnSlide(forEachSelected([](VolumeVisualizerComponent* v, wi::gui::EventArgs args) {
@@ -111,6 +125,8 @@ void VolumeVisWindow::SetEntity(Entity _entity)
 	rangeMaxSlider.SetValue(vis->valueRangeMax);
 	diffusionSlider.SetValue(vis->diffusionAlpha);
 	sensorReachSlider.SetValue(vis->sensorReach);
+	edgeSharpnessSlider.SetValue(vis->edgeSharpness);
+	emissivePowerSlider.SetValue(vis->emissivePower);
 	opacitySlider.SetValue(vis->opacityScale);
 	densitySlider.SetValue(vis->densityScale);
 
@@ -130,6 +146,8 @@ void VolumeVisWindow::ResizeLayout()
 	layout.add(rangeMaxSlider);
 	layout.add(diffusionSlider);
 	layout.add(sensorReachSlider);
+	layout.add(edgeSharpnessSlider);
+	layout.add(emissivePowerSlider);
 	layout.add(opacitySlider);
 	layout.add(densitySlider);
 	layout.add(resetButton);

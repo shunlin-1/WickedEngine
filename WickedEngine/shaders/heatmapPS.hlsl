@@ -96,17 +96,15 @@ float4 main(VertexToPixel input) : SV_TARGET
 
 		if (sampledDensity > 0.005)
 		{
-			// sampledDensity is now the raw normalized sensor value [0,1] (no +0.01 offset).
-			float t01 = saturate(sampledDensity);
-			float3 color = HeatColormap(t01);
+			// CS writes [0.02, 1.0] for sensor-influenced voxels and 0.0 for empty.
+			// Invert the CS's offset so t01 recovers the original [0,1] value.
+			float t01 = saturate((sampledDensity - 0.02) / 0.98);
+			// HDR emissive boost — color is already HDR (>1 at hot end), this pushes
+			// it further into bloom range so the fog feels self-illuminated.
+			float3 color = HeatColormap(t01) * heatmap.emissive_power;
 
-			// Visibility is based on PROXIMITY to any sensor — NOT on "differs from ambient".
-			// Previously we used abs(t01 - ambient) which hid voxels whose color matched
-			// ambient, including the legitimate midpoint where two sensors with different
-			// values average out to the ambient color (blank-middle bug).
-			//
-			// Compute world-space position of this sample and find distance to closest sensor.
-			// If we're near any sensor (within the diffusion reach), be visible.
+			// Visibility = proximity to nearest sensor (kept so empty space is transparent
+			// even though the density texture may be non-zero due to sampler bleed).
 			float3 samplePosWorld = mul(heatmap.world_matrix, float4(samplePosLocal, 1.0)).xyz;
 			float minDistSq = 1e20;
 			for (uint s = 0; s < heatmap.sensor_count; s++)
@@ -114,10 +112,9 @@ float4 main(VertexToPixel input) : SV_TARGET
 				float3 d = samplePosWorld - heatmap.sensors[s].xyz;
 				minDistSq = min(minDistSq, dot(d, d));
 			}
-			// Falloff radius = same sensor_reach used by the CS (keeps visual coherence).
 			float visibilityRadius = heatmap.sensor_reach;
 			float proximity = exp(-minDistSq / (visibilityRadius * visibilityRadius * 2.0));
-			float intensity = saturate(proximity); // pure proximity — no ambient base, so empty is truly transparent
+			float intensity = saturate(proximity);
 
 			// DENSITY = per-step alpha contribution. Squared curve for fine low-end control.
 			float densityStrength = heatmap.density_scale * heatmap.density_scale * 30.0;

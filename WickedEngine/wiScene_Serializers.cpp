@@ -3725,6 +3725,8 @@ namespace wi::scene
 			archive >> ambientValue;
 			archive >> densityScale;
 			archive >> sensorReach;
+			archive >> edgeSharpness;
+			archive >> emissivePower;
 		}
 		else
 		{
@@ -3736,6 +3738,8 @@ namespace wi::scene
 			archive << ambientValue;
 			archive << densityScale;
 			archive << sensorReach;
+			archive << edgeSharpness;
+			archive << emissivePower;
 		}
 	}
 

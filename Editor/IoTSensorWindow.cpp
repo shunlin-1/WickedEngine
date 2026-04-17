@@ -43,8 +43,8 @@ void IoTSensorWindow::Create(EditorComponent* _editor)
 	}));
 	AddWidget(&enabledCheckBox);
 
-	valueSlider.Create(0, 100, 50, 1000, "Value: ");
-	valueSlider.SetTooltip("Sensor reading. Set externally by IoT feed, Lua, or this slider.");
+	valueSlider.Create(1, 100, 50, 1000, "Value: ");
+	valueSlider.SetTooltip("Sensor reading. Set externally by IoT feed, Lua, or this slider. Minimum is 1 — value 0 is reserved as an 'empty' sentinel in the density texture.");
 	valueSlider.OnSlide(forEachSelected([](IoTSensorComponent* s, wi::gui::EventArgs args) {
 		s->sensorValue = args.fValue;
 	}));
