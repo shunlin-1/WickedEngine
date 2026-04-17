@@ -1,10 +1,19 @@
 #include "globals.hlsli"
 #include "heatmap_shared.hlsli"
 
-// Writes a 3D scalar field of normalized sensor values [0,1] mapped
-// into [DENSITY_MIN, 1.0] for "sensor-touched" voxels and 0.0 for
-// "empty" voxels. The offset lets the PS gate on a simple > DENSITY_GATE
-// check to distinguish presence without false-rejecting low-value sensors.
+// Heatmap density field compute pass.
+//
+// For each voxel in the visualizer box, compute a weighted average of the
+// normalized sensor values using a power-weighted Gaussian. Sensor reach
+// and diffusion control the *extent* of each sensor's influence; edge
+// sharpness controls only the *blend* between overlapping sensors (the
+// two responsibilities are intentionally decoupled — see WEIGHT split below).
+//
+// Output encoding (see heatmap_shared.hlsli):
+//   sensor-touched voxel → [DENSITY_MIN, 1.0]  (via EncodeDensity)
+//   empty voxel          → 0.0                 (sentinel)
+// The offset keeps even value-0 sensors safely above the PS gate so low-
+// temperature regions render with the same extent as high-temperature ones.
 RWTexture3D<float> output : register(u0);
 
 // Floor on Gaussian sigma so sensors remain at least pixel-sized even

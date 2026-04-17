@@ -4181,8 +4181,9 @@ void UpdateVisibility(Visibility& vis)
 	wi::profiler::EndRange(range); // Frustum Culling
 }
 
-// Forward declaration — full definition lives near DrawHeatmap for locality.
+// Forward declarations — definitions live near DrawHeatmap for locality.
 void UpdateHeatmapFrameCB(const wi::scene::Scene& scene, FrameCB& frameCB);
+void DispatchHeatmapCompute(CommandList cmd);
 
 void UpdatePerFrameData(
 	Scene& scene,
@@ -5272,18 +5273,7 @@ void UpdateRenderData(
 		wi::profiler::EndRange(range);
 	}
 
-	{
-		// Heat map dispatch — same pattern as wind. Frame CB is already bound by BindCommonResources above.
-		auto range = wi::profiler::BeginRangeGPU("Heatmap", cmd);
-		device->EventBegin("Heatmap", cmd);
-		device->BindComputeShader(&shaders[CSTYPE_HEATMAP], cmd);
-		device->BindUAV(&textures[TEXTYPE_3D_HEATMAP], 0, cmd);
-		const TextureDesc& heatmap_desc = textures[TEXTYPE_3D_HEATMAP].GetDesc();
-		device->Dispatch(heatmap_desc.width / 8, heatmap_desc.height / 8, heatmap_desc.depth / 8, cmd);
-		PushBarrier(GPUBarrier::Image(&textures[TEXTYPE_3D_HEATMAP], ResourceState::UNORDERED_ACCESS, textures[TEXTYPE_3D_HEATMAP].desc.layout));
-		device->EventEnd(cmd);
-		wi::profiler::EndRange(range);
-	}
+	DispatchHeatmapCompute(cmd);
 
 	{
 		device->EventBegin("Skinning and Morph", cmd);
@@ -19246,6 +19236,22 @@ void UpdateHeatmapFrameCB(const wi::scene::Scene& scene, FrameCB& frameCB)
 		frameCB.scene.heatmap.enabled = 1;
 		break; // only the first active visualizer renders
 	}
+}
+
+void DispatchHeatmapCompute(CommandList cmd)
+{
+	// Writes the 3D density texture that the fog PS samples. The inbound
+	// barrier (layout → UAV) is batched with wind barriers up in the frame's
+	// Update Buffers block for efficiency; we emit the outbound one here.
+	auto range = wi::profiler::BeginRangeGPU("Heatmap", cmd);
+	device->EventBegin("Heatmap", cmd);
+	device->BindComputeShader(&shaders[CSTYPE_HEATMAP], cmd);
+	device->BindUAV(&textures[TEXTYPE_3D_HEATMAP], 0, cmd);
+	const TextureDesc& desc = textures[TEXTYPE_3D_HEATMAP].GetDesc();
+	device->Dispatch(desc.width / 8, desc.height / 8, desc.depth / 8, cmd);
+	PushBarrier(GPUBarrier::Image(&textures[TEXTYPE_3D_HEATMAP], ResourceState::UNORDERED_ACCESS, textures[TEXTYPE_3D_HEATMAP].desc.layout));
+	device->EventEnd(cmd);
+	wi::profiler::EndRange(range);
 }
 
 void DrawHeatmap(CommandList cmd)
