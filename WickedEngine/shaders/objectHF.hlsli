@@ -98,6 +98,11 @@ PUSHCONSTANT(push, ObjectPushConstants);
 #define OBJECTSHADER_USE_INSTANCEINDEX
 #define OBJECTSHADER_USE_UVSETS
 #define OBJECTSHADER_USE_CAMERAINDEX
+// Pass world position as VS→PS interpolant. The shadow camera CB doesn't
+// populate the fields GetPos3D()'s screen_to_world() reconstruction needs, so
+// the dissolve plane check (and any future shader wanting per-pixel world pos
+// in the transparent-shadow pass) must read it from an explicit interpolant.
+#define OBJECTSHADER_USE_POSITION3D
 #endif // OBJECTSHADER_LAYOUT_SHADOW_TEX
 
 #ifdef OBJECTSHADER_LAYOUT_PREPASS
@@ -319,6 +324,13 @@ struct PixelInput
 {
 	precise float4 pos : SV_Position;
 
+#ifdef OBJECTSHADER_USE_POSITION3D
+	// Explicit world-space position. Used where GetPos3D()'s screen_to_world()
+	// reconstruction can't be trusted (shadow pass — the shadow camera CB is
+	// missing frustum_corners / internal_resolution_rcp).
+	float3 pos3D : POSITION3D;
+#endif // OBJECTSHADER_USE_POSITION3D
+
 #ifdef OBJECTSHADER_USE_COLOR
 	half4 color : COLOR;
 #endif // OBJECTSHADER_USE_COLOR
@@ -405,6 +417,11 @@ struct PixelInput
 
 	inline float3 GetPos3D()
 	{
+#ifdef OBJECTSHADER_USE_POSITION3D
+		// Prefer the interpolant when available — correct even in passes where
+		// the camera CB is partially populated (e.g., shadow pass).
+		return pos3D;
+#else
 #ifdef OBJECTSHADER_USE_CAMERAINDEX
 		ShaderCamera camera = GetCameraIndexed(GetCameraIndex());
 #else
@@ -412,6 +429,7 @@ struct PixelInput
 #endif // OBJECTSHADER_USE_CAMERAINDEX
 
 		return camera.screen_to_world(pos);
+#endif // OBJECTSHADER_USE_POSITION3D
 	}
 
 	inline float3 GetViewVector()
@@ -436,8 +454,14 @@ PixelInput vertex_to_pixel_export(VertexInput input)
 	surface.create(material, input);
 
 	PixelInput Out;
-	
+
 	Out.pos = surface.position;
+
+#ifdef OBJECTSHADER_USE_POSITION3D
+	// Capture world position before the VP multiply so the PS can read it
+	// directly via input.GetPos3D() without needing screen_to_world().
+	Out.pos3D = surface.position.xyz;
+#endif // OBJECTSHADER_USE_POSITION3D
 
 #ifdef OBJECTSHADER_USE_CAMERAINDEX
 	ShaderCamera camera = GetCameraIndexed(input.GetInstancePointer().GetCameraIndex());
