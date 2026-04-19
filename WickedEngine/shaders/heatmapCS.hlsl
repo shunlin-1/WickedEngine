@@ -3,36 +3,32 @@
 
 // Heatmap density field compute pass.
 //
-// For each voxel in the visualizer box, compute a weighted average of the
-// normalized sensor values using a power-weighted Gaussian. Sensor reach
-// and diffusion control the *extent* of each sensor's influence; edge
-// sharpness controls only the *blend* between overlapping sensors (the
-// two responsibilities are intentionally decoupled — see WEIGHT split below).
+// For each voxel in the visualizer box, compute two values:
+//   .r = presence — saturate(sum of raw Gaussian weights). Drives the PS gate.
+//   .g = t01      — edge-sharpened weighted average of normalized sensor values.
+//                   Computed UNCONDITIONALLY (even for low-presence voxels) so
+//                   linear filtering between neighbors never blends through a
+//                   "cold" fake value and produces blue halos around hot sensors.
 //
-// Output encoding (see heatmap_shared.hlsli):
-//   sensor-touched voxel → [DENSITY_MIN, 1.0]  (via EncodeDensity)
-//   empty voxel          → 0.0                 (sentinel)
-// The offset keeps even value-0 sensors safely above the PS gate so low-
-// temperature regions render with the same extent as high-temperature ones.
-RWTexture3D<float> output : register(u0);
+// See heatmap_shared.hlsli for the rationale.
+//
+// Sensor reach and diffusion control the *extent* of each sensor's influence;
+// edge sharpness controls only the *blend* between overlapping sensors. The
+// two responsibilities are intentionally decoupled — see WEIGHT split below.
+RWTexture3D<float2> output : register(u0);
 
 // Floor on Gaussian sigma so sensors remain at least pixel-sized even
 // right after a Reset Diffusion Time (avoids a 1-frame invisible blip).
 static const float SIGMA_FLOOR = 0.05;
-
-// Minimum totalWeight to count a voxel as "sensor-touched". Below this,
-// the voxel is treated as empty. Chosen tiny so the rendered region
-// reaches ~3 sigma from the nearest sensor before cutting off.
-static const float EMPTY_WEIGHT_THRESHOLD = 0.0001;
 
 [numthreads(8, 8, 8)]
 void main(uint3 DTid : SV_DispatchThreadID)
 {
 	const ShaderScene::ShaderHeatmap heatmap = GetScene().heatmap;
 
-	if (heatmap.enabled == 0)
+	if (heatmap.enabled == 0 || heatmap.sensor_count == 0)
 	{
-		output[DTid] = 0.0;
+		output[DTid] = float2(0.0, 0.0);
 		return;
 	}
 
@@ -51,48 +47,64 @@ void main(uint3 DTid : SV_DispatchThreadID)
 	sg = max(SIGMA_FLOOR, sg);
 	float s2 = 2.0 * sg * sg;
 
-	// Weight computation is split so edge_sharpness affects ONLY the blend
-	// zone between sensors, NOT how far each sensor reaches:
+	// ==========================================================================
+	// Weight split (the subtle part): we need TWO independent things per voxel
+	//   (A) presence — raw Gaussian sum, drives the "does this voxel render?" gate
+	//   (B) t01      — edge-sharpened weighted average, drives the color
 	//
-	//   presenceWeight (raw Gaussian)  → decides "is a sensor near this voxel?"
-	//                                    (controls the spread/reach of the field)
-	//   blendWeight    (sharpened)     → decides "how much does each sensor
-	//                                    contribute to this voxel's color?"
-	//                                    (controls boundary sharpness between sensors)
+	// Naive approach (OLD): sharp = pow(gauss, edge_sharpness). That under-
+	// flows to 0 for far voxels at high sharpness (pow(1e-6, 100) ≈ 10^-540),
+	// leaving blendTotal = weightedSum = 0, t01 fallback = 0 → BLUE halo.
 	//
-	// Using pow() on the raw Gaussian also scales sigma (mathematically
-	// pow(exp(-x), k) == exp(-k·x)), so we'd see sharpness shrink the
-	// field extent. Splitting the two responsibilities avoids that coupling.
-	float totalPresence = 0.0;  // for emptiness check — independent of sharpness
-	float blendTotal    = 0.0;  // denominator for color blend
-	float weightedSum   = 0.0;  // numerator for color blend
+	// Fix: compute sharp RELATIVE to the closest sensor using the identity
+	//       pow(exp(x), k) == exp(k·x)  ⇒
+	//       relSharp[s] = exp(-edge_sharpness * (dist[s]² - dist_min²) / s²)
+	// The closest sensor always has relSharp = 1. Others decay smoothly toward 0.
+	// Blend ratios are identical to the naive version (a common scale cancels),
+	// but now nothing underflows — t01 is meaningful at every voxel, everywhere.
+	// ==========================================================================
 
-	[unroll]
+	// Pass 1: distances + raw Gaussian (for presence), and find closest sensor.
+	float dists2[8];
+	float totalPresence = 0.0;
+	float min_dist2 = 1e20;
+
 	for (uint s = 0; s < 8; s++)
 	{
 		if (s >= heatmap.sensor_count) break;
 
 		float3 diff = worldPos - heatmap.sensors[s].xyz;
-		float dist2 = dot(diff, diff);
-
-		float gauss = exp(-dist2 / s2);
-		float sharp = pow(gauss, heatmap.edge_sharpness);
-
-		totalPresence += gauss;
-		blendTotal    += sharp;
-		weightedSum   += sharp * heatmap.sensors[s].w;
+		float d2 = dot(diff, diff);
+		dists2[s] = d2;
+		min_dist2 = min(min_dist2, d2);
+		totalPresence += exp(-d2 / s2);
 	}
 
-	// Presence uses the raw Gaussian sum so the field extent is driven by
-	// diffusion + sensor_reach only. Color comes from the sharpness-weighted
-	// average, so edge_sharpness shapes the blend but doesn't shrink the field.
-	if (totalPresence > EMPTY_WEIGHT_THRESHOLD)
+	// Pass 2: relative sharpened weights for the temperature blend.
+	float blendTotal  = 0.0;
+	float weightedSum = 0.0;
+
+	// Quadratic response curve so the slider 1→10 covers the full useful range:
+	//   k=1  → effective 2  → smooth gradient across overlap
+	//   k=5  → effective 50 → tight blend band, each sensor mostly owns its half
+	//   k=10 → effective 200 → near-Voronoi, razor-thin yellow seam
+	const float effective_k = heatmap.edge_sharpness * heatmap.edge_sharpness * 2.0;
+
+	[unroll]
+	for (uint s2_i = 0; s2_i < 8; s2_i++)
 	{
-		float t = saturate(weightedSum / blendTotal);
-		output[DTid] = EncodeDensity(t);
+		if (s2_i >= heatmap.sensor_count) break;
+
+		// Relative to closest: the closest sensor has relSharp = 1, others decay.
+		float relSharp = exp(-effective_k * (dists2[s2_i] - min_dist2) / s2);
+		blendTotal  += relSharp;
+		weightedSum += relSharp * heatmap.sensors[s2_i].w;
 	}
-	else
-	{
-		output[DTid] = 0.0;
-	}
+
+	// blendTotal is guaranteed ≥ 1.0 (closest sensor contributes exp(0) = 1), so
+	// this division is always well-conditioned — no NaN, no fallback to blue.
+	float presence = saturate(totalPresence);
+	float t01      = saturate(weightedSum / blendTotal);
+
+	output[DTid] = float2(presence, t01);
 }

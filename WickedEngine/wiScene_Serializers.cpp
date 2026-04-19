@@ -270,6 +270,10 @@ namespace wi::scene
 			{
 				archive >> mesh_blend;
 			}
+			if (seri.GetVersion() >= 12)
+			{
+				archive >> dissolveBaseAlpha;
+			}
 
 			for (auto& x : textures)
 			{
@@ -448,6 +452,10 @@ namespace wi::scene
 			if (seri.GetVersion() >= 11)
 			{
 				archive << mesh_blend;
+			}
+			if (seri.GetVersion() >= 12)
+			{
+				archive << dissolveBaseAlpha;
 			}
 		}
 	}
@@ -3713,6 +3721,22 @@ namespace wi::scene
 		}
 	}
 
+	void DissolvePlaneComponent::Serialize(wi::Archive& archive, EntitySerializer& seri)
+	{
+		// _flags packs ENABLED + LIGHT_PASS_THROUGH — no version bump needed since
+		// the field is always present; new flags just read as 0 on old archives.
+		if (archive.IsReadMode())
+		{
+			archive >> _flags;
+			archive >> edgeWidth;
+		}
+		else
+		{
+			archive << _flags;
+			archive << edgeWidth;
+		}
+	}
+
 	void VolumeVisualizerComponent::Serialize(wi::Archive& archive, EntitySerializer& seri)
 	{
 		if (archive.IsReadMode())
@@ -3726,6 +3750,10 @@ namespace wi::scene
 			archive >> opacityScale;
 			archive >> densityScale;
 			archive >> emissivePower;
+			if (seri.GetVersion() >= 1)
+			{
+				archive >> resolution;
+			}
 		}
 		else
 		{
@@ -3738,43 +3766,7 @@ namespace wi::scene
 			archive << opacityScale;
 			archive << densityScale;
 			archive << emissivePower;
-		}
-	}
-
-	void IoTSimulatorComponent::Serialize(wi::Archive& archive, EntitySerializer& seri)
-	{
-		if (archive.IsReadMode())
-		{
-			uint32_t vmode, mmode;
-			archive >> _flags;
-			archive >> vmode;
-			archive >> offset;
-			archive >> amplitude;
-			archive >> frequency;
-			archive >> phase;
-			archive >> meanReversion;
-			archive >> rampDuration;
-			archive >> mmode;
-			archive >> motionCenter;
-			archive >> motionRadius;
-			archive >> motionSpeed;
-			valueMode = (ValueMode)vmode;
-			motionMode = (MotionMode)mmode;
-		}
-		else
-		{
-			archive << _flags;
-			archive << (uint32_t)valueMode;
-			archive << offset;
-			archive << amplitude;
-			archive << frequency;
-			archive << phase;
-			archive << meanReversion;
-			archive << rampDuration;
-			archive << (uint32_t)motionMode;
-			archive << motionCenter;
-			archive << motionRadius;
-			archive << motionSpeed;
+			archive << resolution;
 		}
 	}
 

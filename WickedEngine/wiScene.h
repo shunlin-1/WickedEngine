@@ -32,7 +32,7 @@ namespace wi::scene
 		wi::ecs::ComponentManager<LayerComponent>& layers = componentLibrary.Register<LayerComponent>("wi::scene::Scene::layers");
 		wi::ecs::ComponentManager<TransformComponent>& transforms = componentLibrary.Register<TransformComponent>("wi::scene::Scene::transforms");
 		wi::ecs::ComponentManager<HierarchyComponent>& hierarchy = componentLibrary.Register<HierarchyComponent>("wi::scene::Scene::hierarchy");
-		wi::ecs::ComponentManager<MaterialComponent>& materials = componentLibrary.Register<MaterialComponent>("wi::scene::Scene::materials", 11); // version = 11
+		wi::ecs::ComponentManager<MaterialComponent>& materials = componentLibrary.Register<MaterialComponent>("wi::scene::Scene::materials", 12); // version = 12 (added dissolve)
 		wi::ecs::ComponentManager<MeshComponent>& meshes = componentLibrary.Register<MeshComponent>("wi::scene::Scene::meshes", 4); // version = 4
 		wi::ecs::ComponentManager<ImpostorComponent>& impostors = componentLibrary.Register<ImpostorComponent>("wi::scene::Scene::impostors");
 		wi::ecs::ComponentManager<ObjectComponent>& objects = componentLibrary.Register<ObjectComponent>("wi::scene::Scene::objects", 4); // version = 4
@@ -67,8 +67,8 @@ namespace wi::scene
 		wi::ecs::ComponentManager<SplineComponent>& splines = componentLibrary.Register<SplineComponent>("wi::scene::Scene::splines", 4); // version = 4
 		wi::ecs::ComponentManager<wi::GaussianSplatModel>& gaussian_splats = componentLibrary.Register<wi::GaussianSplatModel>("wi::scene::Scene::gaussian_splats");
 		wi::ecs::ComponentManager<IoTSensorComponent>& iot_sensors = componentLibrary.Register<IoTSensorComponent>("wi::scene::Scene::iot_sensors");
-		wi::ecs::ComponentManager<VolumeVisualizerComponent>& volume_visualizers = componentLibrary.Register<VolumeVisualizerComponent>("wi::scene::Scene::volume_visualizers");
-		wi::ecs::ComponentManager<IoTSimulatorComponent>& iot_simulators = componentLibrary.Register<IoTSimulatorComponent>("wi::scene::Scene::iot_simulators");
+		wi::ecs::ComponentManager<VolumeVisualizerComponent>& volume_visualizers = componentLibrary.Register<VolumeVisualizerComponent>("wi::scene::Scene::volume_visualizers", 1); // version = 1 (added resolution)
+		wi::ecs::ComponentManager<DissolvePlaneComponent>& dissolve_planes = componentLibrary.Register<DissolvePlaneComponent>("wi::scene::Scene::dissolve_planes");
 
 		// Non-serialized attributes:
 		float dt = 0;
@@ -527,7 +527,6 @@ namespace wi::scene
 		void RunCharacterUpdateSystem(wi::jobsystem::context& ctx);
 		void RunSplineUpdateSystem(wi::jobsystem::context& ctx);
 		void RunVolumeVisualizerUpdateSystem(wi::jobsystem::context& ctx);
-		void RunIoTSimulatorUpdateSystem(wi::jobsystem::context& ctx);
 
 
 		struct RayIntersectionResult

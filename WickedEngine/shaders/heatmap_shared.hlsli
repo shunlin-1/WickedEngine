@@ -3,26 +3,21 @@
 
 // Density-texture encoding shared by heatmapCS (writer) and heatmapPS (reader).
 //
-//   empty voxel (no sensor nearby)  → 0.0
-//   sensor-touched voxel, value t01 → DENSITY_MIN + t01 * DENSITY_RANGE
+// FORMAT: R16G16_FLOAT, two independent channels:
+//   .r = presence   [0, 1]  → "how much sensor coverage here?" (density gate)
+//   .g = t01        [0, 1]  → "what temperature is this voxel?" (colormap input)
 //
-// The offset keeps even a t01 = 0 sensor's encoded density safely above
-// DENSITY_GATE so the PS doesn't mistake a legitimate cold sensor for
-// empty space. Without the offset, low-value sensors produce asymmetric
-// visible regions because the gate clips them at the edges.
+// The channels are decoupled on purpose. With a single-channel encoding, linear
+// filtering between a HOT voxel (encoded near 1) and an EMPTY voxel (encoded 0)
+// samples through the full range, decoding to false "cold" values — so hot
+// sensors appear with a fake blue halo.
+//
+// With two channels, even an "empty" voxel still carries a meaningful t01 (the
+// Gaussian-weighted average of all sensors at that position, no matter how small
+// the weights). Linear filtering of t01 between adjacent voxels therefore stays
+// within the plausible color range of the scene. Presence is what gates whether
+// the sample renders; temperature is what colors it.
 
-static const float DENSITY_MIN   = 0.02;  // encoded density of a t01 = 0 sensor
-static const float DENSITY_RANGE = 0.98;  // 1.0 - DENSITY_MIN
-static const float DENSITY_GATE  = 0.005; // PS treats below this as empty
-
-float EncodeDensity(float t01)
-{
-	return DENSITY_MIN + saturate(t01) * DENSITY_RANGE;
-}
-
-float DecodeDensity(float encoded)
-{
-	return saturate((encoded - DENSITY_MIN) / DENSITY_RANGE);
-}
+static const float DENSITY_GATE = 0.005; // PS treats presence below this as empty
 
 #endif

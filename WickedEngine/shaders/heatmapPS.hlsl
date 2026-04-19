@@ -8,19 +8,19 @@ struct VertexToPixel
 };
 
 // ============================================================
-// Tunables — adjust these to change the overall look, not the
-// editor-exposed per-visualizer values.
+// Samples the two-channel Shepard-weighted density field written by heatmapCS.
+//   .r = presence (alpha gate) — sum of raw Gaussians. Linear-filtering-safe.
+//   .g = t01      (color)       — edge-sharpened weighted average of sensor values.
+// Each voxel has ONE temperature value, computed once per frame in the CS and
+// read back here — a true interpolated temperature field "like a real heat map".
+// edge_sharpness in the CS controls how strongly the closest sensor dominates
+// the color blend; high k → razor Voronoi territories; low k → smooth gradient.
 // ============================================================
 static const uint  RAY_MAX_STEPS        = 64;
-static const float EARLY_OUT_ALPHA      = 0.95;  // stop marching once fog is this opaque
-static const float DISCARD_ALPHA        = 0.001; // final pixel-cull threshold
-static const float DENSITY_STRENGTH_MAX = 30.0;  // internal multiplier on density_scale^2
+static const float EARLY_OUT_ALPHA      = 0.95;
+static const float DISCARD_ALPHA        = 0.001;
+static const float DENSITY_STRENGTH_MAX = 30.0;
 
-// ============================================================
-// Inferno-like colormap with HDR tails. t ∈ [0, 1] → RGB.
-// The *1.2 / *1.5 values in the top ends push pixel brightness
-// over 1.0, which Wicked's tonemap + bloom picks up.
-// ============================================================
 float3 HeatColormap(float t)
 {
 	t = saturate(t);
@@ -44,8 +44,8 @@ bool RayBoxIntersect(float3 ro, float3 rd, out float tNear, out float tFar)
 	return tNear < tFar && tFar > 0.0;
 }
 
-// Fast min-distance from sample to any active sensor in world space.
-// Used as a proximity gate so empty-space sampler bleed doesn't render.
+// Closest-sensor distance — used as a proximity gate so that sampler bleed
+// through "empty" cells doesn't paint faint fog between far-apart sensors.
 float MinDistSqToSensor(float3 worldPos, ShaderScene::ShaderHeatmap hm)
 {
 	float minDistSq = 1e20;
@@ -64,11 +64,9 @@ float4 main(VertexToPixel input) : SV_TARGET
 	if (heatmap.enabled == 0 || heatmap.texture_index < 0)
 		discard;
 
-	// World-space ray from camera through this pixel's cube-face position.
 	float3 camPos = GetCamera().position;
 	float3 rayDirWorld = normalize(input.worldPos - camPos);
 
-	// Local-space ray for box intersection and texture lookup.
 	float3 localCamPos = mul(heatmap.world_matrix_inverse, float4(camPos, 1.0)).xyz;
 	float3 localRayDir = normalize(mul((float3x3)heatmap.world_matrix_inverse, rayDirWorld));
 
@@ -82,9 +80,8 @@ float4 main(VertexToPixel input) : SV_TARGET
 	float stepSize = (tFar - tNear) / float(RAY_MAX_STEPS);
 	float jitter = frac(sin(dot(input.pos.xy, float2(12.9898, 78.233))) * 43758.5453);
 
-	// Pre-computed density strength (squared curve for fine control at the low end).
-	float densityStrength = heatmap.density_scale * heatmap.density_scale * DENSITY_STRENGTH_MAX;
-	float visibilitySigma2 = heatmap.sensor_reach * heatmap.sensor_reach * 2.0;
+	float densityStrength   = heatmap.density_scale * heatmap.density_scale * DENSITY_STRENGTH_MAX;
+	float visibilitySigma2  = heatmap.sensor_reach * heatmap.sensor_reach * 2.0;
 
 	float4 accum = float4(0, 0, 0, 0);
 
@@ -93,16 +90,19 @@ float4 main(VertexToPixel input) : SV_TARGET
 	{
 		if (accum.a >= EARLY_OUT_ALPHA) break;
 
-		float t = tNear + (float(i) + jitter) * stepSize;
-		float3 samplePosLocal = localCamPos + localRayDir * t;
+		float rayT = tNear + (float(i) + jitter) * stepSize;
+		float3 samplePosLocal = localCamPos + localRayDir * rayT;
 		float3 uvw = samplePosLocal * 0.5 + 0.5;
 
-		float encoded = heatmapTex.SampleLevel(sampler_linear_clamp, uvw, 0).r;
-		if (encoded <= DENSITY_GATE)
+		// Two-channel sample: .r = presence (alpha gate), .g = t01 (color).
+		// t01 is populated for every voxel in the CS so linear filtering stays
+		// within the plausible temperature range — no fake blue halos.
+		float2 sample = heatmapTex.SampleLevel(sampler_linear_clamp, uvw, 0).rg;
+		float presence = sample.r;
+		if (presence <= DENSITY_GATE)
 			continue;
 
-		// Decode → colormap → HDR boost
-		float  t01   = DecodeDensity(encoded);
+		float  t01   = sample.g;
 		float3 color = HeatColormap(t01) * heatmap.emissive_power;
 
 		// Proximity-based visibility: empty cells that bled through the sampler
@@ -119,6 +119,5 @@ float4 main(VertexToPixel input) : SV_TARGET
 
 	if (accum.a < DISCARD_ALPHA) discard;
 
-	// Final opacity multiplier — fades the whole fog uniformly without changing shape.
 	return accum * heatmap.opacity_scale;
 }

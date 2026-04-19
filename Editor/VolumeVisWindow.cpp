@@ -63,15 +63,15 @@ void VolumeVisWindow::Create(EditorComponent* _editor)
 	}));
 	AddWidget(&diffusionSlider);
 
-	sensorReachSlider.Create(0.5f, 50.0f, 5.0f, 1000, "Sensor Reach: ");
-	sensorReachSlider.SetTooltip("Maximum radius (world units) each sensor can spread to. Keep around 30% of your box size. Small = localized hot spots, large = sensors bleed into each other.");
+	sensorReachSlider.Create(0.5f, 500.0f, 5.0f, 1000, "Sensor Reach: ");
+	sensorReachSlider.SetTooltip("Maximum radius (world units) each sensor can spread to. Scale this with your box size — roughly 30-50% of box half-width. Small = localized hot spots, large = sensors bleed into each other.");
 	sensorReachSlider.OnSlide(forEachSelected([](VolumeVisualizerComponent* v, wi::gui::EventArgs args) {
 		v->sensorReach = args.fValue;
 	}));
 	AddWidget(&sensorReachSlider);
 
-	edgeSharpnessSlider.Create(0.2f, 10.0f, 1.0f, 1000, "Edge Sharpness: ");
-	edgeSharpnessSlider.SetTooltip("How wide is the blend zone between sensors. 1 = soft Gaussian (default), higher = sharper territory boundaries (each sensor holds color until a narrow edge), lower = very smooth smear.");
+	edgeSharpnessSlider.Create(1.0f, 10.0f, 1.0f, 1000, "Edge Sharpness: ");
+	edgeSharpnessSlider.SetTooltip("Sharpness of each sensor's individual heat blob edge. 1 = soft Gaussian fade (default), 10 = crisp blob edge. Per-sensor compositing renders each sensor as its own colored blob; values above 10 are indistinguishable.");
 	edgeSharpnessSlider.OnSlide(forEachSelected([](VolumeVisualizerComponent* v, wi::gui::EventArgs args) {
 		v->edgeSharpness = args.fValue;
 	}));
@@ -97,6 +97,17 @@ void VolumeVisWindow::Create(EditorComponent* _editor)
 		v->densityScale = args.fValue;
 	}));
 	AddWidget(&densitySlider);
+
+	resolutionCombo.Create("Voxel Grid: ");
+	resolutionCombo.AddItem("32^3  (fastest, coarsest)", 32);
+	resolutionCombo.AddItem("64^3  (default)",           64);
+	resolutionCombo.AddItem("128^3 (sharp, 8x cost)",   128);
+	resolutionCombo.AddItem("256^3 (very sharp, 64x)",  256);
+	resolutionCombo.SetTooltip("Voxel grid resolution (independent of box size). Higher = sharper field at large box scales, at CS cost growing with N^3. Recreates the 3D texture — one frame hitch when changed.");
+	resolutionCombo.OnSelect(forEachSelected([](VolumeVisualizerComponent* v, wi::gui::EventArgs args) {
+		v->resolution = (uint32_t)args.userdata;
+	}));
+	AddWidget(&resolutionCombo);
 
 	resetButton.Create("Reset Diffusion Time");
 	resetButton.SetTooltip("Reset the elapsed time so blobs start from minimum spread");
@@ -129,6 +140,7 @@ void VolumeVisWindow::SetEntity(Entity _entity)
 	emissivePowerSlider.SetValue(vis->emissivePower);
 	opacitySlider.SetValue(vis->opacityScale);
 	densitySlider.SetValue(vis->densityScale);
+	resolutionCombo.SetSelectedByUserdataWithoutCallback((uint64_t)vis->resolution);
 
 	infoLabel.SetText(
 		"Place this entity over a region. All IoT sensors in the scene\n"
@@ -150,6 +162,7 @@ void VolumeVisWindow::ResizeLayout()
 	layout.add(emissivePowerSlider);
 	layout.add(opacitySlider);
 	layout.add(densitySlider);
+	layout.add(resolutionCombo);
 	layout.add(resetButton);
 	layout.add_fullwidth(infoLabel);
 }

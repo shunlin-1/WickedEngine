@@ -178,6 +178,7 @@ void GraphicsWindow::Create(EditorComponent* _editor)
 		});
 	AddWidget(&shadowLODCheckBox);
 
+
 	GIBoostSlider.Create(1, 10, 1.0f, 1000.0f, "GI Boost: ");
 	GIBoostSlider.SetTooltip("Adjust the strength of GI.\nNote that values other than 1.0 will cause mismatch with path tracing reference!");
 	GIBoostSlider.SetSize(XMFLOAT2(wid, itemheight));

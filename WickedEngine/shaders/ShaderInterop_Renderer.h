@@ -96,6 +96,26 @@ struct alignas(16) ShaderScene
 		uint _padding;
 	};
 	ShaderHeatmap heatmap;
+
+	// Dissolve (X-ray / section-cut) — per-scene active plane data. Filled by
+	// wi::renderer::UpdateFrameCB from the first enabled DissolvePlaneComponent
+	// + its sibling TransformComponent. When no plane is active, `enabled=0`
+	// and the shader early-outs (returns full opacity).
+	//
+	// The plane is defined in world space by `dot(worldPos, plane.xyz) + plane.w`:
+	//   < 0 → solid side (no fade)
+	//   > 0 → fade side   (alpha ramps to 0 across `edge_width` world units)
+	// Normal = transform's local +Y rotated by the entity's world rotation;
+	// plane.w = -dot(normal, transform.position).
+	struct alignas(16) ShaderDissolve
+	{
+		float4 plane;           // xyz = world-space unit normal, w = signed offset
+		float  edge_width;      // world-units width of the fade transition band
+		uint   enabled;         // 0 = feature off globally, 1 = active
+		uint   pass_light;      // 0 = shadows cast normally, 1 = shadow casters above plane clipped
+		uint   _pad0;
+	};
+	ShaderDissolve dissolve;
 };
 
 enum SHADERMATERIAL_OPTIONS
@@ -112,6 +132,7 @@ enum SHADERMATERIAL_OPTIONS
 	SHADERMATERIAL_OPTION_BIT_ADDITIVE = 1 << 9,
 	SHADERMATERIAL_OPTION_BIT_USE_VERTEXAO = 1 << 10,
 	SHADERMATERIAL_OPTION_BIT_CAPSULE_SHADOW_DISABLED = 1 << 11,
+	SHADERMATERIAL_OPTION_BIT_DISSOLVE = 1 << 12,
 };
 
 #ifndef __cplusplus
@@ -522,6 +543,7 @@ struct alignas(32) ShaderMaterial
 	inline bool IsAdditive() { return GetOptions() & SHADERMATERIAL_OPTION_BIT_ADDITIVE; }
 	inline bool IsDoubleSided() { return GetOptions() & SHADERMATERIAL_OPTION_BIT_DOUBLE_SIDED; }
 	inline bool IsCapsuleShadowDisabled() { return GetOptions() & SHADERMATERIAL_OPTION_BIT_CAPSULE_SHADOW_DISABLED; }
+	inline bool IsDissolveEnabled() { return GetOptions() & SHADERMATERIAL_OPTION_BIT_DISSOLVE; }
 	inline bool IsUnlit() { return GetShaderType() == SHADERTYPE_UNLIT; }
 
 #endif // __cplusplus

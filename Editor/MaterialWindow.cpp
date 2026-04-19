@@ -468,6 +468,15 @@ void MaterialWindow::Create(EditorComponent* _editor)
 	}));
 	AddWidget(&capsuleShadowCheckBox);
 
+	dissolveCheckBox.Create("Dissolve (X-ray): ");
+	dissolveCheckBox.SetTooltip("Opt this material into the global dissolve/section-cut effect.\nGeometry above the global cut Y will fade to transparent.\nGlobal enable + Y threshold live in the Graphics window.");
+	dissolveCheckBox.SetPos(XMFLOAT2(x, y += step));
+	dissolveCheckBox.SetSize(XMFLOAT2(hei, hei));
+	dissolveCheckBox.OnClick(forEachSelected([] (auto material, auto args) {
+		material->SetDissolveEnabled(args.bValue);
+	}));
+	AddWidget(&dissolveCheckBox);
+
 
 	shaderTypeComboBox.Create("Shader: ");
 	shaderTypeComboBox.SetTooltip("Select a shader for this material. \nCustom shaders (*) will also show up here (see wi::renderer:RegisterCustomShader() for more info.)\nNote that custom shaders (*) can't select between blend modes, as they are created with an explicit blend mode.");
@@ -1194,6 +1203,7 @@ void MaterialWindow::SetEntity(Entity entity)
 		disableStreamingCheckBox.SetCheck(material->IsTextureStreamingDisabled());
 		coplanarCheckBox.SetCheck(material->IsCoplanarBlending());
 		capsuleShadowCheckBox.SetCheck(material->IsCapsuleShadowDisabled());
+		dissolveCheckBox.SetCheck(material->IsDissolveEnabled());
 		normalMapSlider.SetValue(material->normalMapStrength);
 		roughnessSlider.SetValue(material->roughness);
 		reflectanceSlider.SetValue(material->reflectance);
@@ -1445,6 +1455,7 @@ void MaterialWindow::ResizeLayout()
 	layout.add_right(disableStreamingCheckBox);
 	layout.add_right(coplanarCheckBox);
 	layout.add_right(capsuleShadowCheckBox);
+	layout.add_right(dissolveCheckBox);
 	layout.add(shaderTypeComboBox);
 	layout.add(blendModeComboBox);
 	layout.add(shadingRateComboBox);

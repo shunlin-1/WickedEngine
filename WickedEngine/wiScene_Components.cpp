@@ -388,6 +388,10 @@ namespace wi::scene
 		{
 			material.options_stencilref |= SHADERMATERIAL_OPTION_BIT_CAPSULE_SHADOW_DISABLED;
 		}
+		if (IsDissolveEnabled())
+		{
+			material.options_stencilref |= SHADERMATERIAL_OPTION_BIT_DISSOLVE;
+		}
 
 		material.options_stencilref |= wi::renderer::CombineStencilrefs(engineStencilRef, userStencilRef) << 24u;
 
@@ -470,6 +474,12 @@ namespace wi::scene
 		}
 		if (transmission > 0 || cloak > 0)
 		{
+			return FILTER_TRANSPARENT;
+		}
+		if (IsDissolveEnabled())
+		{
+			// Dissolve-tagged materials render through the transparent path so the
+			// world-Y fade doesn't create black voids in single-sided mesh interiors.
 			return FILTER_TRANSPARENT;
 		}
 		if (userBlendMode == BLENDMODE_OPAQUE)

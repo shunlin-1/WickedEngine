@@ -40,6 +40,7 @@
 #endif // !defined(OBJECTSHADER_LAYOUT_COMMON) && !defined(ENVMAPRENDERING)
 
 #include "globals.hlsli"
+#include "dissolve_shared.hlsli"
 #include "brdf.hlsli"
 #include "lightingHF.hlsli"
 #include "skyAtmosphere.hlsli"
@@ -654,6 +655,15 @@ float4 main(PixelInput input, in bool is_frontface : SV_IsFrontFace APPEND_COVER
 	if (material.textures[TRANSPARENCYMAP].IsValid())
 	{
 		surface.baseColor.a *= material.textures[TRANSPARENCYMAP].Sample(sampler_objectshader, uvsets).r;
+	}
+
+	// Dissolve (X-ray / section-cut) fade. Per-material opt-in via the DISSOLVE
+	// option bit. The active cut plane lives in frame.scene.dissolve — moved/
+	// rotated via the DissolvePlaneComponent's TransformComponent in the scene.
+	[branch]
+	if (material.IsDissolveEnabled())
+	{
+		surface.baseColor.a *= DissolveAlpha(surface.P);
 	}
 #endif // PREPASS || TRANSPARENT
 

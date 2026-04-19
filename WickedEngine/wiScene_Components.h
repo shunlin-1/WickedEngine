@@ -137,7 +137,8 @@ namespace wi::scene
 			DISABLE_TEXTURE_STREAMING = 1 << 15,
 			COPLANAR_BLENDING = 1 << 16, // force transparent material draw in opaque pass (useful for coplanar polygons)
 			DISABLE_CAPSULE_SHADOW = 1 << 17,
-			INTERNAL = 1 << 18 // used only for internal purposes
+			INTERNAL = 1 << 18, // used only for internal purposes
+			DISSOLVE = 1 << 19, // opt-in: fade geometry above the global dissolve_threshold (X-ray/slice look)
 		};
 		uint32_t _flags = CAST_SHADOW;
 
@@ -200,6 +201,12 @@ namespace wi::scene
 		float chromatic_aberration = 0;
 		float saturation = 1;
 		float mesh_blend = 0;
+
+		// Dissolve (X-ray / section-cut) — per-material opt-in via DISSOLVE flag.
+		// Geometry whose world-space Y is above the global dissolve_threshold fades
+		// to dissolveBaseAlpha (0 = invisible, 1 = solid). Edge width of the fade
+		// band and global threshold are controlled renderer-wide, not per-material.
+		float dissolveBaseAlpha = 0.0f;
 
 		XMFLOAT4 sheenColor = XMFLOAT4(1, 1, 1, 1);
 		float sheenRoughness = 0;
@@ -306,6 +313,8 @@ namespace wi::scene
 		constexpr bool IsVertexAODisabled() const { return _flags & DISABLE_VERTEXAO; }
 		constexpr bool IsTextureStreamingDisabled() const { return _flags & DISABLE_TEXTURE_STREAMING; }
 		constexpr bool IsCoplanarBlending() const { return _flags & COPLANAR_BLENDING; }
+		constexpr bool IsDissolveEnabled() const { return _flags & DISSOLVE; }
+		constexpr void SetDissolveEnabled(bool value) { SetDirty(); set_flag(_flags, DISSOLVE, value); }
 
 		constexpr void SetBaseColor(const XMFLOAT4& value) { SetDirty(); baseColor = value; }
 		constexpr void SetSpecularColor(const XMFLOAT4& value) { SetDirty(); specularColor = value; }
@@ -2749,6 +2758,10 @@ namespace wi::scene
 		float sensorReach    = 5.0f;  // world-units cap on per-sensor spread
 		float edgeSharpness  = 1.0f;  // blend-zone width — 1 = soft Gaussian, >1 = sharper territory boundaries
 
+		// Voxel grid granularity (independent of box world size). Higher = sharper field
+		// but costlier CS dispatch. Must be a multiple of 8 (matches CS threadgroup size).
+		uint32_t resolution = 64;
+
 		// Visual strength
 		float opacityScale   = 1.0f;  // [0,1] post-multiplier on the final accumulated fog
 		float densityScale   = 0.2f;  // [0,1] per-step alpha contribution
@@ -2763,61 +2776,30 @@ namespace wi::scene
 		void Serialize(wi::Archive& archive, wi::ecs::EntitySerializer& seri);
 	};
 
-	// IoT Simulator: drives a paired IoTSensorComponent value and/or its TransformComponent
-	// from a procedural pattern. Use this to exercise the heat map / cooling / diffusion
-	// pipeline before real IoT data is wired in.
+	// Dissolve Plane — a scene-placeable cut plane for the X-ray / section-cut
+	// visualization. The plane's position and orientation come from the attached
+	// TransformComponent: the entity's local +Y axis (rotated by the transform)
+	// is the plane normal, and the translation is a point on the plane. Moving
+	// or rotating the entity moves/rotates the cut plane.
 	//
-	// Attach to the SAME entity that holds IoTSensorComponent (value drive) and optionally
-	// TransformComponent (motion drive). All three cohabitate on one entity.
-	struct IoTSimulatorComponent
+	// Per-material opt-in via MaterialComponent::DISSOLVE. Only one active plane
+	// is used per frame (the first enabled DissolvePlaneComponent found in the scene).
+	struct DissolvePlaneComponent
 	{
 		enum FLAGS
 		{
 			EMPTY = 0,
 			ENABLED = 1 << 0,
-			DRIVES_VALUE = 1 << 1,     // write pattern into IoTSensorComponent::sensorValue
-			DRIVES_TRANSFORM = 1 << 2, // write motion into TransformComponent::translation_local
+			LIGHT_PASS_THROUGH = 1 << 1, // shadow casters above the plane are ignored — light passes through
 		};
-		uint32_t _flags = ENABLED | DRIVES_VALUE;
+		uint32_t _flags = ENABLED;
 
-		// === Value pattern ===
-		enum class ValueMode : uint32_t
-		{
-			SINE = 0,
-			RANDOM_WALK = 1, // Ornstein-Uhlenbeck mean-reverting noise
-			RAMP_HOLD = 2,   // linear ramp, then hold
-		};
-		ValueMode valueMode = ValueMode::SINE;
-		float offset = 50.0f;        // center value (raw sensor units, e.g. °C)
-		float amplitude = 30.0f;     // peak deviation above/below offset
-		float frequency = 0.25f;     // Hz (sine cycles per second)
-		float phase = 0.0f;          // radians phase offset (staggered sensors)
-		float meanReversion = 0.3f;  // OU kappa (per second) — high = snaps back fast
-		float rampDuration = 5.0f;   // seconds to reach offset+amplitude (RAMP_HOLD)
-
-		// === Motion pattern ===
-		enum class MotionMode : uint32_t
-		{
-			STATIC = 0,
-			ORBIT = 1,     // circle in XZ around motionCenter
-			PING_PONG = 2, // linear back-and-forth along +X of motionCenter
-		};
-		MotionMode motionMode = MotionMode::STATIC;
-		XMFLOAT3 motionCenter = XMFLOAT3(0, 0, 0); // anchor (world-space)
-		float motionRadius = 2.0f;                  // orbit radius / ping-pong half-length
-		float motionSpeed = 0.5f;                   // Hz (full cycle per second)
-
-		// Runtime state (not serialized)
-		float _runtime_time = 0.0f;       // seconds accumulated while enabled
-		float _runtime_value = 50.0f;     // last OU sample (seed state for random walk)
-		uint64_t _runtime_rng_state = 1;  // xorshift64* seed (auto-seeded on first tick)
+		float edgeWidth = 0.5f; // world-units width of the fade transition band
 
 		constexpr bool IsEnabled() const { return _flags & ENABLED; }
-		constexpr bool DrivesValue() const { return _flags & DRIVES_VALUE; }
-		constexpr bool DrivesTransform() const { return _flags & DRIVES_TRANSFORM; }
 		constexpr void SetEnabled(bool value) { set_flag(_flags, ENABLED, value); }
-		constexpr void SetDrivesValue(bool value) { set_flag(_flags, DRIVES_VALUE, value); }
-		constexpr void SetDrivesTransform(bool value) { set_flag(_flags, DRIVES_TRANSFORM, value); }
+		constexpr bool IsLightPassThrough() const { return _flags & LIGHT_PASS_THROUGH; }
+		constexpr void SetLightPassThrough(bool value) { set_flag(_flags, LIGHT_PASS_THROUGH, value); }
 
 		void Serialize(wi::Archive& archive, wi::ecs::EntitySerializer& seri);
 	};

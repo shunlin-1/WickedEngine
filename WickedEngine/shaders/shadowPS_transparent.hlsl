@@ -7,6 +7,14 @@ float4 main(PixelInput input) : SV_TARGET
 {
 	ShaderMaterial material = GetMaterial();
 
+	// Dissolve pass-through: dissolve-tagged pixels past the fade midpoint drop
+	// their shadow contribution so light "passes through" the faded geometry.
+	[branch]
+	if (material.IsDissolveEnabled())
+	{
+		ClipShadowForDissolve(input.GetPos3D());
+	}
+
 	float4 uvsets = input.GetUVSets();
 	half4 color;
 	[branch]

@@ -19,6 +19,7 @@ public:
 	wi::gui::Slider emissivePowerSlider;
 	wi::gui::Slider opacitySlider;
 	wi::gui::Slider densitySlider;
+	wi::gui::ComboBox resolutionCombo;
 	wi::gui::Button resetButton;
 	wi::gui::Label infoLabel;
 

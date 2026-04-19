@@ -2978,7 +2978,7 @@ void EditorComponent::Update(float dt)
 		componentsWnd.gaussiansplatWnd.SetEntity(INVALID_ENTITY);
 		componentsWnd.iotSensorWnd.SetEntity(INVALID_ENTITY);
 		componentsWnd.volumeVisWnd.SetEntity(INVALID_ENTITY);
-		componentsWnd.iotSimulatorWnd.SetEntity(INVALID_ENTITY);
+		componentsWnd.dissolvePlaneWnd.SetEntity(INVALID_ENTITY);
 	}
 	else
 	{
@@ -3018,7 +3018,7 @@ void EditorComponent::Update(float dt)
 		componentsWnd.gaussiansplatWnd.SetEntity(picked.entity);
 		componentsWnd.iotSensorWnd.SetEntity(picked.entity);
 		componentsWnd.volumeVisWnd.SetEntity(picked.entity);
-		componentsWnd.iotSimulatorWnd.SetEntity(picked.entity);
+		componentsWnd.dissolvePlaneWnd.SetEntity(picked.entity);
 
 		bool found_object = false;
 		bool found_mesh = false;
@@ -6597,7 +6597,7 @@ void EditorComponent::RefreshSceneList()
 			componentsWnd.gaussiansplatWnd.SetEntity(wi::ecs::INVALID_ENTITY);
 			componentsWnd.iotSensorWnd.SetEntity(wi::ecs::INVALID_ENTITY);
 			componentsWnd.volumeVisWnd.SetEntity(wi::ecs::INVALID_ENTITY);
-			componentsWnd.iotSimulatorWnd.SetEntity(wi::ecs::INVALID_ENTITY);
+			componentsWnd.dissolvePlaneWnd.SetEntity(wi::ecs::INVALID_ENTITY);
 
 			componentsWnd.RefreshEntityTree();
 			ResetHistory();

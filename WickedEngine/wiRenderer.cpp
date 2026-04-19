@@ -158,6 +158,7 @@ float CAPSULE_SHADOW_ANGLE = XM_PIDIV4;
 float CAPSULE_SHADOW_FADE = 0.2f;
 bool SHADOW_LOD_OVERRIDE = true;
 
+
 Texture shadowMapAtlas;
 Texture shadowMapAtlas_Transparent;
 int max_shadow_resolution_2D = 1024;
@@ -2262,10 +2263,13 @@ void LoadBuffers()
 		device->SetName(&textures[TEXTYPE_2D_CAUSTICS], "textures[TEXTYPE_2D_CAUSTICS]");
 	}
 	{
-		// Heat map 3D texture: written by heatmapCS, sampled by heatmapPS
+		// Heat map 3D texture: written by heatmapCS, sampled by heatmapPS.
+		// Two channels: .r = presence (density gate), .g = t01 (colormap input).
+		// Separating them avoids linear-filter bleed between hot voxels and empty
+		// neighbors producing fake cold (blue) halos — see heatmap_shared.hlsli.
 		TextureDesc desc;
 		desc.type = TextureDesc::Type::TEXTURE_3D;
-		desc.format = Format::R16_FLOAT;
+		desc.format = Format::R16G16_FLOAT;
 		desc.width = 64;
 		desc.height = 64;
 		desc.depth = 64;
@@ -4185,6 +4189,10 @@ void UpdateVisibility(Visibility& vis)
 void UpdateHeatmapFrameCB(const wi::scene::Scene& scene, FrameCB& frameCB);
 void DispatchHeatmapCompute(CommandList cmd);
 
+// Dissolve plane — extracts the active DissolvePlaneComponent (first enabled)
+// and its sibling TransformComponent, and populates frameCB.scene.dissolve.
+void UpdateDissolveFrameCB(const wi::scene::Scene& scene, FrameCB& frameCB);
+
 void UpdatePerFrameData(
 	Scene& scene,
 	const Visibility& vis,
@@ -4444,6 +4452,10 @@ void UpdatePerFrameData(
 	// IoT heatmap: populate the per-frame shader data from the scene's
 	// VolumeVisualizer + IoTSensor components. Helper defined further down.
 	UpdateHeatmapFrameCB(*vis.scene, frameCB);
+
+	// Dissolve plane: populate the per-frame cut plane from the first active
+	// DissolvePlaneComponent + its sibling TransformComponent.
+	UpdateDissolveFrameCB(*vis.scene, frameCB);
 
 	// See if indirect debug buffer needs to be resized:
 	if (indirectDebugStatsReadback_available[device->GetBufferIndex()] && indirectDebugStatsReadback[device->GetBufferIndex()].mapped_data != nullptr)
@@ -19179,8 +19191,43 @@ void DrawVoxelGrid(const wi::VoxelGrid* voxelgrid)
 // over a unit cube) runs from RenderPath3D's transparent pass via DrawHeatmap.
 // =============================================================================
 
+// Ensure the 3D heatmap texture matches the requested voxel grid resolution.
+// Resolution is clamped to [32, 256] and snapped to a multiple of 8 (CS threadgroup).
+// The GPU resource's shared_ptr keeps any in-flight references alive until retirement,
+// so recreation is safe to call from the per-frame CPU path.
+static void EnsureHeatmapResolution(uint32_t requested)
+{
+	requested = std::max(32u, std::min(256u, requested));
+	requested = (requested + 7u) & ~7u;
+	if (textures[TEXTYPE_3D_HEATMAP].GetDesc().width == requested)
+		return;
+
+	TextureDesc desc;
+	desc.type = TextureDesc::Type::TEXTURE_3D;
+	desc.format = Format::R16G16_FLOAT;
+	desc.width = requested;
+	desc.height = requested;
+	desc.depth = requested;
+	desc.bind_flags = BindFlag::SHADER_RESOURCE | BindFlag::UNORDERED_ACCESS;
+	device->CreateTexture(&desc, nullptr, &textures[TEXTYPE_3D_HEATMAP]);
+	device->SetName(&textures[TEXTYPE_3D_HEATMAP], "textures[TEXTYPE_3D_HEATMAP]");
+}
+
 void UpdateHeatmapFrameCB(const wi::scene::Scene& scene, FrameCB& frameCB)
 {
+	// Resize the 3D texture up-front if any enabled visualizer requests a different
+	// grid resolution. Only the first enabled one wins (same rule used below for
+	// the transform / sensor pass).
+	for (size_t i = 0; i < scene.volume_visualizers.GetCount(); ++i)
+	{
+		const wi::scene::VolumeVisualizerComponent& v = scene.volume_visualizers[i];
+		if (v.IsEnabled())
+		{
+			EnsureHeatmapResolution(v.resolution);
+			break;
+		}
+	}
+
 	// Defaults — disabled. Set to enabled only if we find an active visualizer.
 	frameCB.scene.heatmap.texture_index = device->GetDescriptorIndex(&textures[TEXTYPE_3D_HEATMAP], SubresourceType::SRV);
 	frameCB.scene.heatmap.enabled = 0;
@@ -19262,6 +19309,50 @@ void DrawHeatmap(CommandList cmd)
 	device->BindPipelineState(&PSO_heatmap, cmd);
 	device->Draw(36, 0, cmd); // 36 verts = cube from cube.hlsli sourced in the VS
 	device->EventEnd(cmd);
+}
+
+// =============================================================================
+// Dissolve plane — per-frame population of frameCB.scene.dissolve
+// =============================================================================
+// A DissolvePlaneComponent lives on a normal entity. Its sibling TransformComponent
+// defines both the plane position (translation) and the plane normal (entity's
+// world-space +Y axis, so rotating the entity rotates the cut plane). Only the
+// first enabled plane in the scene is consumed — extra planes are ignored.
+void UpdateDissolveFrameCB(const wi::scene::Scene& scene, FrameCB& frameCB)
+{
+	// Default: feature off. Shader early-outs to alpha=1.
+	frameCB.scene.dissolve.enabled = 0;
+	frameCB.scene.dissolve.pass_light = 0;
+	frameCB.scene.dissolve.plane = XMFLOAT4(0, 1, 0, 0);
+	frameCB.scene.dissolve.edge_width = 0.5f;
+
+	for (size_t i = 0; i < scene.dissolve_planes.GetCount(); ++i)
+	{
+		const wi::scene::DissolvePlaneComponent& plane = scene.dissolve_planes[i];
+		if (!plane.IsEnabled()) continue;
+
+		wi::ecs::Entity entity = scene.dissolve_planes.GetEntity(i);
+		const wi::scene::TransformComponent* xform = scene.transforms.GetComponent(entity);
+		if (xform == nullptr) continue;
+
+		// Plane normal = entity's world +Y axis. Transform the local up vector
+		// (0, 1, 0, 0) by the world matrix — zero w keeps it a direction.
+		XMMATRIX worldMat = XMLoadFloat4x4(&xform->world);
+		XMVECTOR normal = XMVector3Normalize(XMVector3TransformNormal(XMVectorSet(0, 1, 0, 0), worldMat));
+		XMFLOAT3 n;
+		XMStoreFloat3(&n, normal);
+
+		// Plane offset: plane equation is n·P + w = 0 on the plane. Solve for w
+		// using the transform's translation as a known point on the plane.
+		const XMFLOAT3 p = xform->GetPosition();
+		const float w = -(n.x * p.x + n.y * p.y + n.z * p.z);
+
+		frameCB.scene.dissolve.plane = XMFLOAT4(n.x, n.y, n.z, w);
+		frameCB.scene.dissolve.edge_width = std::max(0.001f, plane.edgeWidth);
+		frameCB.scene.dissolve.enabled = 1;
+		frameCB.scene.dissolve.pass_light = plane.IsLightPassThrough() ? 1u : 0u;
+		break; // first enabled plane wins
+	}
 }
 void DrawPathQuery(const wi::PathQuery* pathquery)
 {
