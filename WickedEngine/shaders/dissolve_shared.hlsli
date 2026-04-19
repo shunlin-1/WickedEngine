@@ -33,8 +33,8 @@ half DissolveAlpha(float3 worldPos)
 	return (half)(1.0 - smoothstep(0.0, edge, signedDist));
 }
 
-// For shadow shaders — clips the pixel when the active dissolve plane is in
-// pass-light mode AND the surface is past the fade band.
+// For alpha-tested shadow shaders — clips the pixel when the active dissolve
+// plane is in pass-light mode AND the surface is past the fade band.
 //
 // The threshold is SIGNED-DISTANCE-based (not alpha-based) with a safety
 // margin: we only drop the shadow once the pixel is clearly on the "faded"
@@ -54,6 +54,21 @@ void ClipShadowForDissolve(float3 worldPos)
 	// visible in the forward pass, so their shadow should remain too.
 	if (signedDist > edge)
 		clip(-1);
+}
+
+// For transparent shadow shaders — returns the attenuation to apply to the
+// caster's opacity. 1 on the solid side (shadow casts normally), smoothly
+// fades to 0 across edge_width on the faded side (shadow lightens, then
+// fully passes light). Matches DissolveAlpha() so the shadow fade band
+// aligns exactly with the visual mesh fade band in the forward pass.
+//
+// Returns 1 (no change) when dissolve is off or pass-light is disabled —
+// shadows cast normally in those cases, even for dissolve-flagged meshes.
+half DissolveShadowAttenuation(float3 worldPos)
+{
+	if (GetFrame().scene.dissolve.enabled == 0 || GetFrame().scene.dissolve.pass_light == 0)
+		return (half)1.0;
+	return DissolveAlpha(worldPos);
 }
 
 #endif // WI_DISSOLVE_SHARED_HLSLI

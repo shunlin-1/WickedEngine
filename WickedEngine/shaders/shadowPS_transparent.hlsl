@@ -7,12 +7,14 @@ float4 main(PixelInput input) : SV_TARGET
 {
 	ShaderMaterial material = GetMaterial();
 
-	// Dissolve pass-through: dissolve-tagged pixels past the fade midpoint drop
-	// their shadow contribution so light "passes through" the faded geometry.
+	// Dissolve pass-through: dissolve-flagged casters fade their shadow smoothly
+	// across edge_width, matching the forward-pass mesh fade. No clip → no
+	// frame-to-frame flicker at the cut plane boundary.
+	half dissolve_atten = (half)1.0;
 	[branch]
 	if (material.IsDissolveEnabled())
 	{
-		ClipShadowForDissolve(input.GetPos3D());
+		dissolve_atten = DissolveShadowAttenuation(input.GetPos3D());
 	}
 
 	float4 uvsets = input.GetUVSets();
@@ -57,6 +59,11 @@ float4 main(PixelInput input) : SV_TARGET
 	}
 	
 	opacity = lerp(opacity, 0.5, material.GetCloak());
+
+	// Dissolve pass-through: scale opacity by the plane attenuation so the
+	// shadow fades in lockstep with the visible geometry. atten=1 → unchanged,
+	// atten=0 → opacity=0 → tint=1 (full light). Smooth across edge_width.
+	opacity *= dissolve_atten;
 
 	color.rgb *= 1 - opacity; // if fully opaque, then black (not let through any light)
 
